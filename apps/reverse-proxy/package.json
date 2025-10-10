@@ -1,0 +1,17 @@
+{
+  "name": "@reverse-proxy/worker",
+  "type": "module",
+  "private": true,
+  "module": "src/index.ts",
+  "scripts": {
+    "test": "bunx vitest run --config vitest.config.ts",
+    "test:coverage": "bunx vitest run --coverage --config vitest.config.ts",
+    "typecheck": "bunx tsgo --project tsconfig.json",
+    "lint": "bunx biome check src tests vitest.config.ts",
+    "lint:fix": "bunx biome check --write src tests vitest.config.ts",
+    "deploy": "bunx wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20251008.0"
+  }
+}

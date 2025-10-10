@@ -1,0 +1,17 @@
+# Copy this file to `.dev.vars` and adjust values for local development.
+# Ensure `.dev.vars` stays untracked.
+
+# Cloudflare account binding used by Wrangler CLI.
+CLOUDFLARE_ACCOUNT_ID="<account-id>"
+
+# Custom domain (subdomain of kkk4oru.com) used to serve the Worker.
+API_DOMAIN="<api-domain.example.com>"
+
+# Queue name used for cache warming. Must exist in your Cloudflare account when targeting the queue environment.
+CACHE_WARM_QUEUE_NAME="<queue-name>"
+
+# Optional: enable verbose logging from the proxy middleware.
+LOG_REQUESTS="0"
+
+# Add additional bindings below as needed, for example:
+# API_ENDPOINT="https://api.example.com"
