@@ -1,0 +1,28 @@
+{
+  "name": "reverse-proxy",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "bunx vitest run --config apps/reverse-proxy/vitest.config.ts",
+    "test:coverage": "bunx vitest run --coverage --config apps/reverse-proxy/vitest.config.ts",
+    "typecheck": "bunx tsgo --project apps/reverse-proxy/tsconfig.json",
+    "tsc": "bunx tsc --project tsconfig.json --noEmit",
+    "lint": "bunx biome check .",
+    "lint:fix": "bunx biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.5",
+    "@types/bun": "latest",
+    "@typescript/native-preview": "7.0.0-dev.20251009.1",
+    "typescript": "5.9.3",
+    "@vitest/coverage-v8": "3.2.4",
+    "vitest": "3.2.4",
+    "wrangler": "4.42.1"
+  },
+  "dependencies": {
+    "hono": "4.9.10"
+  }
+}
