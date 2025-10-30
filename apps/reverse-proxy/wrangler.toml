@@ -5,21 +5,3 @@ workers_dev = false
 
 [vars]
 API_DOMAIN = "${API_DOMAIN}"
-
-[env.queue]
-workers_dev = false
-
-  [env.queue.vars]
-  API_DOMAIN = "${API_DOMAIN}"
-  LOG_REQUESTS = "${LOG_REQUESTS}"
-  CACHE_WARM_QUEUE_NAME = "${CACHE_WARM_QUEUE_NAME}"
-
-  [[env.queue.queues.producers]]
-  binding = "CACHE_WARM_QUEUE"
-  queue = "${CACHE_WARM_QUEUE_NAME}"
-
-  [[env.queue.queues.consumers]]
-  queue = "${CACHE_WARM_QUEUE_NAME}"
-  max_batch_size = 1
-  max_batch_timeout = 15
-  max_retries = 5
