@@ -7,11 +7,7 @@ describe('healthcheck', () => {
   it('returns 200 and logs event', async () => {
     setupEnvironment();
     const consoleSpy = vi.spyOn(console, 'log');
-    const response = await app.request(HEALTHCHECK_PATH, undefined, {
-      CACHE_WARM_QUEUE: {
-        send: vi.fn(),
-      } as unknown as Queue,
-    });
+    const response = await app.request(HEALTHCHECK_PATH);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('ok');
     expect(consoleSpy).toHaveBeenCalledWith('[reverse-proxy]', 'healthcheck', expect.any(Object));
