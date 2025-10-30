@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { app } from '../src/index.ts';
+import { app } from '../src/app.ts';
 import { setupEnvironment } from './helpers.ts';
 
 describe('reverse proxy cache behavior', () => {

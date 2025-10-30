@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApp } from '../src/index.ts';
+import { createApp } from '../src/app.ts';
 import { setupEnvironment } from './helpers.ts';
 
 describe('reverse proxy logging', () => {
