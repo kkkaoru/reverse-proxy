@@ -20,3 +20,12 @@ export const createApp = (
 };
 
 export const app: Hono<{ Bindings: ReverseProxyBindings }> = createApp(DEFAULT_PROXY_OPTIONS);
+
+export type AppFetch = typeof app.fetch;
+export type AppFetchArguments = Parameters<AppFetch>;
+
+export const appFetch: AppFetch = (
+  request: AppFetchArguments[0],
+  env: AppFetchArguments[1],
+  executionContext: AppFetchArguments[2],
+) => app.fetch(request, env, executionContext);
