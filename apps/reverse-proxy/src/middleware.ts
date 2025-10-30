@@ -21,7 +21,6 @@ const CONTENT_TYPE_JSON = 'application/json; charset=utf-8';
 const STATUS_OK = 200;
 const STATUS_BAD_REQUEST = 400;
 const STATUS_NOT_FOUND = 404;
-const STATUS_ACCEPTED = 202;
 const ERROR_MISSING_URL = 'Query parameter "url" is required.';
 const ERROR_INVALID_URL = 'Query parameter "url" must be a valid absolute URL.';
 const LOG_PREFIX = '[reverse-proxy]';
@@ -31,14 +30,9 @@ const LOG_EVENT_FETCH_STATUS = 'fetch-status';
 const LOG_EVENT_DELETE = 'cache-delete';
 const LOG_EVENT_INVALID_URL = 'invalid-url';
 const LOG_EVENT_MISSING_QUERY = 'missing-url-query';
-const LOG_EVENT_QUEUE_ENQUEUE = 'queue-enqueue';
-const LOG_EVENT_QUEUE_PROCESS = 'queue-process';
-const DEFAULT_QUEUE_DELAY_SECONDS = 1;
 
 export interface ProxyCacheOptions {
   enableLogging: boolean;
-  queueBinding?: string;
-  queueDelaySeconds?: number;
 }
 
 const logEvent = (
@@ -107,7 +101,6 @@ const fetchAndCache = async (cacheKey: string, target: URL): Promise<Response> =
 const handleProxyRequest = async (
   target: string,
   options: ProxyCacheOptions,
-  queueProducer?: Queue,
 ): Promise<Response> => {
   const parsed = parseTargetUrl(target);
   if (!parsed.success) {
@@ -121,18 +114,6 @@ const handleProxyRequest = async (
     return cached.clone();
   }
   logEvent(options, LOG_EVENT_CACHE_MISS, { target });
-  if (queueProducer) {
-    const delaySeconds = options.queueDelaySeconds ?? DEFAULT_QUEUE_DELAY_SECONDS;
-    await queueProducer.send({ target: parsed.value.toString() }, { delaySeconds });
-    logEvent(options, LOG_EVENT_QUEUE_ENQUEUE, { target, delaySeconds });
-    return createJsonResponse(
-      {
-        status: 'queued',
-        target: parsed.value.toString(),
-      },
-      STATUS_ACCEPTED,
-    );
-  }
   const upstreamResponse = await fetchAndCache(cacheKey, parsed.value);
   logEvent(options, LOG_EVENT_FETCH_STATUS, { target, status: upstreamResponse.status });
   return upstreamResponse;
@@ -160,11 +141,8 @@ export const createProxyCacheMiddleware = (options: ProxyCacheOptions): Middlewa
       await next();
       return;
     }
-    const queueProducer = options.queueBinding
-      ? ((c.env as Record<string, unknown>)[options.queueBinding] as Queue | undefined)
-      : undefined;
     const handlers: Record<string, (target: string) => Promise<Response>> = {
-      [METHOD_GET]: (target: string) => handleProxyRequest(target, options, queueProducer),
+      [METHOD_GET]: (target: string) => handleProxyRequest(target, options),
       [METHOD_DELETE]: (target: string) => handleDeleteRequest(target, options),
     };
     const handler = handlers[c.req.method];
@@ -179,28 +157,3 @@ export const createProxyCacheMiddleware = (options: ProxyCacheOptions): Middlewa
     }
     return handler(target);
   });
-
-export interface CacheWarmMessage {
-  target: string;
-}
-
-export const processCacheWarmMessage = async (
-  message: CacheWarmMessage,
-  options: ProxyCacheOptions,
-): Promise<void> => {
-  if (!message.target) {
-    logEvent(options, LOG_EVENT_INVALID_URL, { target: message.target });
-    return;
-  }
-  const parsed = parseTargetUrl(message.target);
-  if (!parsed.success) {
-    logEvent(options, LOG_EVENT_INVALID_URL, { target: message.target });
-    return;
-  }
-  const cacheKey = createCacheKey(parsed.value);
-  const response = await fetchAndCache(cacheKey, parsed.value);
-  logEvent(options, LOG_EVENT_QUEUE_PROCESS, {
-    target: message.target,
-    status: response.status,
-  });
-};
