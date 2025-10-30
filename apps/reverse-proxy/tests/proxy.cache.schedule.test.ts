@@ -1,20 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { app } from '../src/index.ts';
-import { processCacheWarmMessage } from '../src/middleware.ts';
 import { setupEnvironment } from './helpers.ts';
 
-interface QueueEnv {
-  CACHE_WARM_QUEUE: Queue;
-}
-
-const createEnv = (queueSend: ReturnType<typeof vi.fn>): QueueEnv => ({
-  CACHE_WARM_QUEUE: {
-    send: queueSend,
-  } as unknown as Queue,
-});
-
-describe('reverse proxy cache scheduling (success)', () => {
-  it('queues cache warm request and serves cached content on subsequent request', async () => {
+describe('reverse proxy cache behavior', () => {
+  it('caches upstream response and serves cached content on subsequent request', async () => {
     const { fetchSpy } = setupEnvironment(() =>
       Promise.resolve(
         new Response('upstream-body', {
@@ -23,61 +12,44 @@ describe('reverse proxy cache scheduling (success)', () => {
         }),
       ),
     );
-    const queueSend = vi.fn().mockResolvedValue(undefined);
-    const env = createEnv(queueSend);
+    fetchSpy.mockClear();
     const encodedTarget = `/?url=${encodeURIComponent('https://example.com/data')}`;
 
-    const scheduled = await app.request(encodedTarget, undefined, env);
-    expect(scheduled.status).toBe(202);
-    expect(queueSend).toHaveBeenCalledWith(
-      { target: 'https://example.com/data' },
-      { delaySeconds: 1 },
-    );
+    const firstResponse = await app.request(encodedTarget);
+    expect(firstResponse.status).toBe(200);
+    expect(await firstResponse.text()).toBe('upstream-body');
 
-    await processCacheWarmMessage({ target: 'https://example.com/data' }, { enableLogging: false });
-
-    const cachedResponse = await app.request(encodedTarget, undefined, env);
+    const cachedResponse = await app.request(encodedTarget);
     expect(cachedResponse.status).toBe(200);
     expect(await cachedResponse.text()).toBe('upstream-body');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
-});
 
-describe('reverse proxy cache scheduling (retry)', () => {
-  it('retries via queue when upstream responds with error', async () => {
+  it('does not cache failed upstream responses', async () => {
     const { fetchSpy } = setupEnvironment(() =>
       Promise.resolve(new Response('fail', { status: 502 })),
     );
-    const queueSend = vi.fn().mockResolvedValue(undefined);
-    const env = createEnv(queueSend);
+    fetchSpy.mockClear();
+    const encodedTarget = `/?url=${encodeURIComponent('https://example.com/error')}`;
 
-    const encodedTarget = `/?url=${encodeURIComponent('https://example.com/data')}`;
-    const firstAttempt = await app.request(encodedTarget, undefined, env);
-    expect(firstAttempt.status).toBe(202);
-    expect(queueSend).toHaveBeenCalledWith(
-      { target: 'https://example.com/data' },
-      { delaySeconds: 1 },
-    );
+    const firstAttempt = await app.request(encodedTarget);
+    expect(firstAttempt.status).toBe(502);
+    expect(await firstAttempt.text()).toBe('fail');
 
-    await processCacheWarmMessage({ target: 'https://example.com/data' }, { enableLogging: false });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-
-    const secondAttempt = await app.request(encodedTarget, undefined, env);
-    expect(secondAttempt.status).toBe(202);
-    expect(queueSend).toHaveBeenCalledTimes(2);
+    const secondAttempt = await app.request(encodedTarget);
+    expect(secondAttempt.status).toBe(502);
+    expect(await secondAttempt.text()).toBe('fail');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('reverse proxy cache scheduling (delete)', () => {
+describe('reverse proxy cache deletion', () => {
   it('returns 404 when deleting without cached entry', async () => {
     setupEnvironment(() => Promise.resolve(new Response('cached', { status: 200 })));
-    const queueSend = vi.fn().mockResolvedValue(undefined);
-    const env = createEnv(queueSend);
 
     const deleteResponse = await app.request(
       `/?url=${encodeURIComponent('https://example.com/data')}`,
       { method: 'DELETE' },
-      env,
     );
     expect(deleteResponse.status).toBe(404);
     const deleteJson = (await deleteResponse.json()) as { deleted: boolean; error: string };
