@@ -5,3 +5,8 @@ workers_dev = false
 
 [vars]
 API_DOMAIN = "${API_DOMAIN}"
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
