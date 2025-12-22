@@ -1,4 +1,4 @@
-name = "reverse-proxy"
+name = "reverse-proxy-queue"
 main = "src/index.ts"
 compatibility_date = "2025-10-09"
 workers_dev = false
