@@ -150,6 +150,44 @@
           }
         }
       }
+    },
+    {
+      "includes": ["apps/**/tests/helpers.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveLinesPerFunction": {
+              "level": "error",
+              "options": {
+                "maxLines": 200,
+                "skipBlankLines": false,
+                "skipIifes": false
+              }
+            },
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/reverse-proxy-with-playwright/**"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noSecrets": "off",
+            "noUnresolvedImports": "off"
+          },
+          "style": {
+            "noDefaultExport": "off"
+          },
+          "suspicious": {
+            "noConsole": "off"
+          },
+          "correctness": {
+            "noNodejsModules": "off"
+          }
+        }
+      }
     }
   ],
   "javascript": {
