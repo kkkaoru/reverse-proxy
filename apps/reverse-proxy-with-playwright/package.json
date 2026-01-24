@@ -1,0 +1,24 @@
+{
+	"name": "reverse-proxy-with-playwright",
+	"type": "module",
+	"private": true,
+	"version": "1.0.0",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "./scripts/deploy.sh",
+		"test": "bunx vitest run --coverage --config vitest.config.ts",
+		"test:watch": "bunx vitest --config vitest.config.ts",
+		"test:coverage": "bunx vitest run --coverage --reporter=html --reporter=lcov --config vitest.config.ts",
+		"typecheck": "bunx tsc --noEmit",
+		"lint": "bunx biome check .",
+		"lint:fix": "bunx biome check --write .",
+		"db:migrate": "wrangler d1 migrations apply reverse-proxy-playwright-db",
+		"db:migrate:local": "wrangler d1 migrations apply reverse-proxy-playwright-db --local"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "4.20260124.0"
+	},
+	"dependencies": {
+		"@noble/ed25519": "3.0.0"
+	}
+}
