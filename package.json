@@ -27,6 +27,7 @@
     "@cloudflare/playwright": "1.1.0",
     "drizzle-kit": "0.31.8",
     "drizzle-orm": "0.43.1",
-    "hono": "4.9.10"
+    "hono": "4.9.10",
+    "iconv-lite": "0.7.2"
   }
 }
