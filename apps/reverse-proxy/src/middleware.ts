@@ -21,6 +21,7 @@ const CONTENT_TYPE_JSON = 'application/json; charset=utf-8';
 const STATUS_OK = 200;
 const STATUS_BAD_REQUEST = 400;
 const STATUS_NOT_FOUND = 404;
+const STATUS_CLIENT_ERROR_START = 400;
 const ERROR_MISSING_URL = 'Query parameter "url" is required.';
 const ERROR_INVALID_URL = 'Query parameter "url" must be a valid absolute URL.';
 const LOG_PREFIX = '[reverse-proxy]';
@@ -80,11 +81,13 @@ const formatKeyDate = (date: Date = new Date()): string => {
 const createCacheKey = (target: URL, date: Date = new Date()): string =>
   `${target.toString()}::${formatKeyDate(date)}`;
 
+const isCacheableStatus = (status: number): boolean => status < STATUS_CLIENT_ERROR_START;
+
 const fetchAndCache = async (cacheKey: string, target: URL): Promise<Response> => {
   const upstream = await globalThis.fetch(target.toString(), {
     cache: CACHE_MODE_NO_STORE,
   });
-  if (upstream.ok) {
+  if (isCacheableStatus(upstream.status)) {
     const upstreamForCache = upstream.clone();
     const sanitizedHeaders = new Headers(upstreamForCache.headers);
     sanitizedHeaders.delete('set-cookie');

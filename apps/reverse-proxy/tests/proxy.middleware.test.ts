@@ -27,4 +27,22 @@ describe('proxy middleware routing', () => {
     const response = await app.request('/', { method: 'POST' });
     expect(response.status).toBe(404);
   });
+
+  it('skips caching for 4xx responses', async () => {
+    const { fetchSpy } = setupEnvironment(() =>
+      Promise.resolve(new Response('missing', { status: 404 })),
+    );
+    fetchSpy.mockClear();
+    const app = createAppWithMiddleware();
+    const encodedTarget = `/?url=${encodeURIComponent('https://example.com/missing')}`;
+
+    const firstAttempt = await app.request(encodedTarget);
+    expect(firstAttempt.status).toBe(404);
+    expect(await firstAttempt.text()).toBe('missing');
+
+    const secondAttempt = await app.request(encodedTarget);
+    expect(secondAttempt.status).toBe(404);
+    expect(await secondAttempt.text()).toBe('missing');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
 });
