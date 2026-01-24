@@ -20,6 +20,10 @@
       "env": {
         "SERENA_PATH": "${SERENA_PATH}"
       }
+    },
+    "cloudflare": {
+      "command": "bunx",
+      "args": ["mcp-remote", "https://docs.mcp.cloudflare.com/mcp"]
     }
   }
 }
