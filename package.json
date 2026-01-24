@@ -15,14 +15,18 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.5",
+    "@cloudflare/workers-types": "4.20260124.0",
     "@types/bun": "latest",
     "@typescript/native-preview": "7.0.0-dev.20251009.1",
-    "typescript": "5.9.3",
     "@vitest/coverage-v8": "3.2.4",
+    "typescript": "5.9.3",
     "vitest": "3.2.4",
     "wrangler": "4.42.1"
   },
   "dependencies": {
+    "@cloudflare/playwright": "1.1.0",
+    "drizzle-kit": "0.31.8",
+    "drizzle-orm": "0.43.1",
     "hono": "4.9.10"
   }
 }
