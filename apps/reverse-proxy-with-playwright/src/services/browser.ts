@@ -7,6 +7,7 @@ import {
   BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
   BROWSER_WAIT_UNTIL_NETWORKIDLE,
 } from '../constants.ts';
+import { convertToUtf8 } from '../utils/encoding.ts';
 import { launchBrowser } from './browser-launcher.ts';
 
 type SameSiteValue = 'Strict' | 'Lax' | 'None';
@@ -108,7 +109,8 @@ export const fetchPage = async (
       timeout: BROWSER_DEFAULT_TIMEOUT_MS,
     });
 
-    const html: string = await page.content();
+    const rawHtml: string = await page.content();
+    const html: string = convertToUtf8(rawHtml);
     const rawStorageState = await context.storageState();
     const storageState: StorageState = convertToStorageState(rawStorageState);
 
