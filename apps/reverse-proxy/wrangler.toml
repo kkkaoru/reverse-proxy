@@ -1,10 +1,19 @@
 name = "reverse-proxy-queue"
 main = "src/index.ts"
 compatibility_date = "2025-10-09"
-workers_dev = false
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[browser]
+binding = "BROWSER"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "7912f4e878ea43408469fdca13632d5c"
 
 [vars]
-API_DOMAIN = "${API_DOMAIN}"
+API_DOMAIN = "reverse-proxy.api.kkk4oru.com"
+CACHE_VERSION = "v5"
 
 [observability.logs]
 enabled = true
