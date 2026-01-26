@@ -188,6 +188,27 @@
           }
         }
       }
+    },
+    {
+      "includes": ["apps/reverse-proxy/src/encoding.ts"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noUnresolvedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/reverse-proxy/tests/encoding.test.ts", "apps/reverse-proxy/tests/proxy.middleware.test.ts"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noSecrets": "off",
+            "noUnresolvedImports": "off"
+          }
+        }
+      }
     }
   ],
   "javascript": {
