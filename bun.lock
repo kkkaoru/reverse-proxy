@@ -23,6 +23,9 @@
     },
     "apps/reverse-proxy": {
       "name": "@reverse-proxy/worker",
+      "dependencies": {
+        "iconv-lite": "0.7.2",
+      },
       "devDependencies": {
         "@cloudflare/workers-types": "4.20251008.0",
       },
