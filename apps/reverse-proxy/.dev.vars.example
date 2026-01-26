@@ -4,11 +4,17 @@
 # Cloudflare account binding used by Wrangler CLI.
 CLOUDFLARE_ACCOUNT_ID="<account-id>"
 
+# KV namespace ID for caching.
+CLOUDFLARE_KV_NAMESPACE_ID="<kv-namespace-id>"
+
 # Custom domain (subdomain of kkk4oru.com) used to serve the Worker.
 API_DOMAIN="<api-domain.example.com>"
 
 # Optional: enable verbose logging from the proxy middleware.
 LOG_REQUESTS="0"
+
+# Cache version for KV key prefix (e.g., v5).
+CACHE_VERSION="v5"
 
 # Add additional bindings below as needed, for example:
 # API_ENDPOINT="https://api.example.com"
