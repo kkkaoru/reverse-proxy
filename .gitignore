@@ -152,6 +152,8 @@ pepper.key
 
 temp
 .wrangler
+**/wrangler.toml
+!**/wrangler.toml.example
 
 # local temp file
 temp.txt
