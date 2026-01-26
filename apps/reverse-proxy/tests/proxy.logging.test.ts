@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApp } from '../src/app.ts';
+import { createApp, type ReverseProxyBindings } from '../src/app.ts';
 import { setupEnvironment } from './helpers.ts';
+
+const DEFAULT_ENV: ReverseProxyBindings = { CACHE_VERSION: 'v1' };
 
 describe('reverse proxy logging', () => {
   it('emits log entries when logging-enabled app handles request', async () => {
@@ -9,8 +11,8 @@ describe('reverse proxy logging', () => {
     const consoleSpy = vi.spyOn(console, 'log');
     consoleSpy.mockClear();
 
-    const encodedTarget = `/?url=${encodeURIComponent('https://example.com/logging')}`;
-    const response = await loggingApp.request(encodedTarget);
+    const encodedTarget: string = `/?url=${encodeURIComponent('https://example.com/logging')}`;
+    const response: Response = await loggingApp.request(encodedTarget, {}, DEFAULT_ENV);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('body');
     expect(consoleSpy).toHaveBeenCalled();
@@ -21,7 +23,11 @@ describe('reverse proxy logging', () => {
     const silentApp = createApp({ enableLogging: false });
     const consoleSpy = vi.spyOn(console, 'log');
     consoleSpy.mockClear();
-    await silentApp.request(`/?url=${encodeURIComponent('https://example.com/logging')}`);
+    await silentApp.request(
+      `/?url=${encodeURIComponent('https://example.com/logging')}`,
+      {},
+      DEFAULT_ENV,
+    );
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 });
