@@ -28,9 +28,9 @@ const parseIpRotateConfigFromEnv = (env: ProxyCacheEnv): IpRotateConfig | undefi
     endpointsJson: env.IP_ROTATE_ENDPOINTS,
     authType: env.IP_ROTATE_AUTH_TYPE,
     apiKey: env.IP_ROTATE_API_KEY,
-    accessKeyId: env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
-    region: env.AWS_REGION,
+    accessKeyId: env.IP_ROTATE_AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.IP_ROTATE_AWS_SECRET_ACCESS_KEY,
+    region: env.IP_ROTATE_AWS_REGION,
   });
 
   return parsed.success ? parsed.config : undefined;
