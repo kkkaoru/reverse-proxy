@@ -68,6 +68,7 @@ export interface LogEventDetail {
   method?: string;
   cacheKey?: string;
   ipRotateUrl?: string;
+  ipRotateEndpoint?: string;
 }
 
 export interface IpRotateFetchParams {
@@ -75,6 +76,11 @@ export interface IpRotateFetchParams {
   readonly headers: Record<string, string>;
   readonly config: IpRotateConfig;
   readonly counters: Map<string, number>;
+}
+
+export interface IpRotateFetchResult {
+  readonly response: Response;
+  readonly usedEndpoint: string;
 }
 
 export interface LogUpstreamErrorParams {
