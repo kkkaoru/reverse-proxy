@@ -45,6 +45,7 @@ import { createErrorResponse } from './responses.ts';
 import type {
   FetchAndCacheParams,
   IpRotateFetchParams,
+  IpRotateFetchResult,
   LogUpstreamErrorParams,
   ProcessFetchResponseParams,
   ProxyCacheOptions,
@@ -124,7 +125,7 @@ export const processFetchResponse = async (
 // Fetch via IP rotation with retry
 export const fetchViaIpRotate = async (
   ipRotateParams: IpRotateFetchParams,
-): Promise<Response | null> => {
+): Promise<IpRotateFetchResult | null> => {
   const result: FetchRetryResult = await fetchWithRetry({
     config: ipRotateParams.config,
     targetUrl: ipRotateParams.url,
@@ -133,7 +134,11 @@ export const fetchViaIpRotate = async (
     method: METHOD_GET,
   });
 
-  return result.success ? result.response : result.lastResponse;
+  if (result.success) {
+    return { response: result.response, usedEndpoint: result.usedEndpoint };
+  }
+
+  return result.lastResponse ? { response: result.lastResponse, usedEndpoint: '' } : null;
 };
 
 // Check if should use IP rotation
@@ -153,19 +158,20 @@ export const performFetch = async (
   const url: URL = new URL(currentUrl);
 
   if (shouldUseIpRotate(options, url) && options.ipRotateConfig) {
-    const ipRotateResponse: Response | null = await fetchViaIpRotate({
+    const ipRotateResult: IpRotateFetchResult | null = await fetchViaIpRotate({
       url,
       headers,
       config: options.ipRotateConfig,
       counters: options.ipRotateCounters,
     });
 
-    if (ipRotateResponse) {
+    if (ipRotateResult) {
       logEvent(options, LOG_EVENT_IP_ROTATE, {
         target: currentUrl,
         ipRotateUrl: url.host,
+        ipRotateEndpoint: ipRotateResult.usedEndpoint,
       });
-      return ipRotateResponse;
+      return ipRotateResult.response;
     }
   }
 
