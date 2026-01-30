@@ -35,8 +35,8 @@ describe('regions', () => {
   });
 
   describe('ALL_REGIONS', () => {
-    test('should have 15 regions', () => {
-      expect(ALL_REGIONS.length).toBe(15);
+    test('should have 17 regions', () => {
+      expect(ALL_REGIONS.length).toBe(17);
     });
 
     test('should include us-east-1', () => {
@@ -44,7 +44,15 @@ describe('regions', () => {
     });
 
     test('should include sa-east-1', () => {
-      expect(ALL_REGIONS[13]).toBe('sa-east-1');
+      expect(ALL_REGIONS[15]).toBe('sa-east-1');
+    });
+
+    test('should include ap-northeast-3', () => {
+      expect(ALL_REGIONS).toContain('ap-northeast-3');
+    });
+
+    test('should include ap-east-1', () => {
+      expect(ALL_REGIONS).toContain('ap-east-1');
     });
   });
 
