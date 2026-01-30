@@ -30,6 +30,11 @@ interface UsagePlanThrottle {
   readonly burstLimit: number;
 }
 
+interface CreateApiKeyAuthParams {
+  readonly api: RestApi;
+  readonly apiKeyValue?: string;
+}
+
 // Constants at top
 const AUTH_TYPE_API_KEY = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
@@ -43,14 +48,15 @@ const createUsagePlanThrottle = (): UsagePlanThrottle => ({
   burstLimit: BURST_LIMIT,
 });
 
-const createApiKeyAuth = (api: RestApi): ApiKeyAuthResult => {
-  const apiKey: IApiKey = api.addApiKey('ApiKey');
-  const usagePlan: UsagePlan = api.addUsagePlan('UsagePlan', {
+const createApiKeyAuth = (params: CreateApiKeyAuthParams): ApiKeyAuthResult => {
+  const apiKeyOptions = params.apiKeyValue ? { value: params.apiKeyValue } : {};
+  const apiKey: IApiKey = params.api.addApiKey('ApiKey', apiKeyOptions);
+  const usagePlan: UsagePlan = params.api.addUsagePlan('UsagePlan', {
     name: USAGE_PLAN_NAME,
     throttle: createUsagePlanThrottle(),
   });
   usagePlan.addApiKey(apiKey);
-  usagePlan.addApiStage({ stage: api.deploymentStage });
+  usagePlan.addApiStage({ stage: params.api.deploymentStage });
   return {
     type: AUTH_TYPE_API_KEY,
     methodOptions: { apiKeyRequired: true },
@@ -64,8 +70,16 @@ const createIamAuth = (): IamAuthResult => ({
   methodOptions: { authorizationType: AuthorizationType.IAM },
 });
 
-const createAuthConfig = (api: RestApi, authType: string): AuthResult =>
-  authType === AUTH_TYPE_IAM ? createIamAuth() : createApiKeyAuth(api);
+interface CreateAuthConfigParams {
+  readonly api: RestApi;
+  readonly authType: string;
+  readonly apiKeyValue?: string;
+}
+
+const createAuthConfig = (params: CreateAuthConfigParams): AuthResult =>
+  params.authType === AUTH_TYPE_IAM
+    ? createIamAuth()
+    : createApiKeyAuth({ api: params.api, apiKeyValue: params.apiKeyValue });
 
 const isApiKeyAuth = (result: AuthResult): result is ApiKeyAuthResult =>
   result.type === AUTH_TYPE_API_KEY;

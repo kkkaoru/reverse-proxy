@@ -253,7 +253,12 @@ describe('ip-rotate-fetch retry logic', () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
 
     const config: IpRotateConfig = {
-      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
       auth: { type: 'api-key', apiKey: 'test-key' },
     };
 
@@ -285,7 +290,12 @@ describe('ip-rotate-fetch retry logic', () => {
     });
 
     const config: IpRotateConfig = {
-      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
       auth: { type: 'api-key', apiKey: 'test-key' },
     };
 
@@ -317,7 +327,12 @@ describe('ip-rotate-fetch retry logic', () => {
     });
 
     const config: IpRotateConfig = {
-      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
       auth: { type: 'api-key', apiKey: 'test-key' },
     };
 
@@ -342,7 +357,12 @@ describe('ip-rotate-fetch retry logic', () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('error', { status: 500 }));
 
     const config: IpRotateConfig = {
-      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
       auth: { type: 'api-key', apiKey: 'test-key' },
     };
 
@@ -366,7 +386,9 @@ describe('ip-rotate-fetch retry logic', () => {
 
   test('fetchWithRetry returns failure when no endpoints available', async () => {
     const config: IpRotateConfig = {
-      endpoints: { 'other.com': ['https://api1.other.com'] },
+      endpoints: {
+        'other.com': [{ endpoint: 'https://api1.other.com', apiKey: 'key1' }],
+      },
       auth: { type: 'api-key', apiKey: 'test-key' },
     };
 
@@ -394,7 +416,12 @@ describe('ip-rotate-fetch retry logic', () => {
     });
 
     const config: IpRotateConfig = {
-      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
       auth: { type: 'api-key', apiKey: 'test-key' },
     };
 
@@ -413,5 +440,39 @@ describe('ip-rotate-fetch retry logic', () => {
     expect(capturedUrls[1]).toBe('https://api2.example.com/path');
     expect(capturedUrls[2]).toBe('https://api1.example.com/path');
     expect(capturedUrls[3]).toBe('https://api2.example.com/path');
+  });
+
+  test('fetchWithRetry uses endpoint-specific API key', async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      capturedHeaders.push(init?.headers as Record<string, string>);
+      return Promise.resolve(new Response('error', { status: 500 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'endpoint-key-1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'endpoint-key-2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'base-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    await fetchWithRetry(params);
+
+    expect(capturedHeaders).toHaveLength(4);
+    expect(capturedHeaders[0]?.['x-api-key']).toBe('endpoint-key-1');
+    expect(capturedHeaders[1]?.['x-api-key']).toBe('endpoint-key-2');
+    expect(capturedHeaders[2]?.['x-api-key']).toBe('endpoint-key-1');
+    expect(capturedHeaders[3]?.['x-api-key']).toBe('endpoint-key-2');
   });
 });

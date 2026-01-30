@@ -17,7 +17,7 @@ import type {
 
 // Constants at top
 const HEADER_API_KEY = 'x-api-key';
-const AUTH_TYPE_API_KEY = 'api-key';
+const AUTH_TYPE_API_KEY: 'api-key' = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
 const ERROR_INVALID_AUTH_TYPE = 'Invalid auth type';
 const ERROR_UNSUPPORTED_AUTH_TYPE = 'Unsupported auth type';
@@ -110,6 +110,15 @@ const createFailureResult = (lastResponse: Response | null, error: string): Fetc
   error,
 });
 
+const createAuthFromEndpoint = (baseAuth: IpRotateAuth, endpointApiKey: string): IpRotateAuth => {
+  // If base auth is api-key type, use the endpoint-specific API key
+  if (isApiKeyAuth(baseAuth)) {
+    return { type: AUTH_TYPE_API_KEY, apiKey: endpointApiKey };
+  }
+  // For IAM auth, continue using the base auth (credentials are global)
+  return baseAuth;
+};
+
 const tryFetchEndpoint = async (
   params: FetchWithRetryParams,
 ): Promise<{ response: Response | null; rewriteSuccess: boolean }> => {
@@ -123,9 +132,12 @@ const tryFetchEndpoint = async (
     return { response: null, rewriteSuccess: false };
   }
 
+  // Use the endpoint-specific API key from the rewrite result
+  const auth: IpRotateAuth = createAuthFromEndpoint(params.config.auth, rewriteResult.apiKey);
+
   const response: Response = await fetchWithAuth({
     url: rewriteResult.url,
-    auth: params.config.auth,
+    auth,
     headers: params.headers,
     method: params.method,
     body: params.body,

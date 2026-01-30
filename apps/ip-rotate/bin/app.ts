@@ -19,6 +19,7 @@ interface ParsedConfig {
   readonly regions: readonly string[];
   readonly stageName: string;
   readonly authType: string;
+  readonly apiKeyValue?: string;
 }
 
 interface StackConfig {
@@ -27,6 +28,7 @@ interface StackConfig {
   readonly account: string;
   readonly stageName: string;
   readonly authType: string;
+  readonly apiKeyValue?: string;
 }
 
 interface EnvContextParams {
@@ -62,6 +64,7 @@ const ENV_TARGET_DOMAINS = 'TARGET_DOMAINS';
 const ENV_REGIONS = 'REGIONS';
 const ENV_STAGE_NAME = 'STAGE_NAME';
 const ENV_AUTH_TYPE = 'AUTH_TYPE';
+const ENV_API_KEY_VALUE = 'API_KEY_VALUE';
 const CONTEXT_TARGET_DOMAINS = 'targetDomains';
 const CONTEXT_REGIONS = 'regions';
 const CONTEXT_STAGE_NAME = 'stageName';
@@ -138,12 +141,13 @@ const parseConfig = (app: App): ParsedConfig => {
   const authType: string =
     getEnvOrContext({ app, envKey: ENV_AUTH_TYPE, contextKey: CONTEXT_AUTH_TYPE }) ??
     DEFAULT_AUTH_TYPE;
+  const apiKeyValue: string | undefined = process.env[ENV_API_KEY_VALUE];
 
   const domains: readonly TargetDomain[] = parseTargetDomains(domainsStr);
   const parsedRegions: readonly string[] = parseRegionsFromEnv(regionsStr);
   const validRegions: readonly string[] = filterValidRegions(parsedRegions);
 
-  return { account, domains, regions: validRegions, stageName, authType };
+  return { account, domains, regions: validRegions, stageName, authType, apiKeyValue };
 };
 
 const createStackProps = (config: StackConfig): IpRotateStackProps => ({
@@ -151,6 +155,7 @@ const createStackProps = (config: StackConfig): IpRotateStackProps => ({
   targetProtocol: config.domain.protocol,
   stageName: config.stageName,
   authType: config.authType,
+  apiKeyValue: config.apiKeyValue,
   env: { account: config.account, region: config.region },
 });
 
@@ -171,6 +176,7 @@ const buildStackConfigsForDomain = (
       account: config.account,
       stageName: config.stageName,
       authType: config.authType,
+      apiKeyValue: config.apiKeyValue,
     }),
   );
 

@@ -15,10 +15,21 @@ import type { IpRotateConfig } from '../src/ip-rotate/types.ts';
 const createTestConfig = (): IpRotateConfig => ({
   endpoints: {
     'api.example.com': [
-      'https://abc123.execute-api.us-east-1.amazonaws.com/proxy',
-      'https://def456.execute-api.eu-west-1.amazonaws.com/proxy',
+      {
+        endpoint: 'https://abc123.execute-api.us-east-1.amazonaws.com/proxy',
+        apiKey: 'key-us-east-1',
+      },
+      {
+        endpoint: 'https://def456.execute-api.eu-west-1.amazonaws.com/proxy',
+        apiKey: 'key-eu-west-1',
+      },
     ],
-    'data.example.org': ['https://ghi789.execute-api.ap-northeast-1.amazonaws.com/proxy'],
+    'data.example.org': [
+      {
+        endpoint: 'https://ghi789.execute-api.ap-northeast-1.amazonaws.com/proxy',
+        apiKey: 'key-ap-northeast-1',
+      },
+    ],
   },
   auth: {
     type: 'api-key',
@@ -68,19 +79,25 @@ describe('ip-rotate-client', () => {
   });
 
   describe('getNextEndpoint', () => {
-    test('should return first endpoint on first call', () => {
+    test('should return first endpoint with apiKey on first call', () => {
       const config = createTestConfig();
       const counters = new Map<string, number>();
       const result = getNextEndpoint({ config, domain: 'api.example.com', counters });
-      expect(result).toBe('https://abc123.execute-api.us-east-1.amazonaws.com/proxy');
+      expect(result).toEqual({
+        endpoint: 'https://abc123.execute-api.us-east-1.amazonaws.com/proxy',
+        apiKey: 'key-us-east-1',
+      });
     });
 
-    test('should return second endpoint on second call', () => {
+    test('should return second endpoint with apiKey on second call', () => {
       const config = createTestConfig();
       const counters = new Map<string, number>();
       getNextEndpoint({ config, domain: 'api.example.com', counters });
       const result = getNextEndpoint({ config, domain: 'api.example.com', counters });
-      expect(result).toBe('https://def456.execute-api.eu-west-1.amazonaws.com/proxy');
+      expect(result).toEqual({
+        endpoint: 'https://def456.execute-api.eu-west-1.amazonaws.com/proxy',
+        apiKey: 'key-eu-west-1',
+      });
     });
 
     test('should cycle back to first endpoint on third call', () => {
@@ -89,7 +106,10 @@ describe('ip-rotate-client', () => {
       getNextEndpoint({ config, domain: 'api.example.com', counters });
       getNextEndpoint({ config, domain: 'api.example.com', counters });
       const result = getNextEndpoint({ config, domain: 'api.example.com', counters });
-      expect(result).toBe('https://abc123.execute-api.us-east-1.amazonaws.com/proxy');
+      expect(result).toEqual({
+        endpoint: 'https://abc123.execute-api.us-east-1.amazonaws.com/proxy',
+        apiKey: 'key-us-east-1',
+      });
     });
 
     test('should return null for unconfigured domain', () => {
@@ -114,12 +134,15 @@ describe('ip-rotate-client', () => {
       const counters = new Map<string, number>();
       getNextEndpoint({ config, domain: 'api.example.com', counters });
       const result = getNextEndpoint({ config, domain: 'data.example.org', counters });
-      expect(result).toBe('https://ghi789.execute-api.ap-northeast-1.amazonaws.com/proxy');
+      expect(result).toEqual({
+        endpoint: 'https://ghi789.execute-api.ap-northeast-1.amazonaws.com/proxy',
+        apiKey: 'key-ap-northeast-1',
+      });
     });
   });
 
   describe('rewriteUrlForIpRotate', () => {
-    test('should rewrite URL with endpoint base', () => {
+    test('should rewrite URL with endpoint base and return apiKey', () => {
       const config = createTestConfig();
       const counters = new Map<string, number>();
       const targetUrl = new URL('https://api.example.com/path/to/resource');
@@ -129,6 +152,7 @@ describe('ip-rotate-client', () => {
         expect(result.url.toString()).toBe(
           'https://abc123.execute-api.us-east-1.amazonaws.com/proxy/path/to/resource',
         );
+        expect(result.apiKey).toBe('key-us-east-1');
       }
     });
 
@@ -142,6 +166,7 @@ describe('ip-rotate-client', () => {
         expect(result.url.toString()).toBe(
           'https://abc123.execute-api.us-east-1.amazonaws.com/proxy/path?foo=bar&baz=qux',
         );
+        expect(result.apiKey).toBe('key-us-east-1');
       }
     });
 
@@ -163,14 +188,18 @@ describe('ip-rotate-client', () => {
         expect(result.url.toString()).toBe(
           'https://abc123.execute-api.us-east-1.amazonaws.com/proxy/',
         );
+        expect(result.apiKey).toBe('key-us-east-1');
       }
     });
   });
 
   describe('parseIpRotateConfig', () => {
     test('should parse API Key config successfully', () => {
+      const endpointsJson = JSON.stringify({
+        'api.example.com': [{ endpoint: 'https://endpoint1.com', apiKey: 'key1' }],
+      });
       const result = parseIpRotateConfig({
-        endpointsJson: '{"api.example.com":["https://endpoint1.com"]}',
+        endpointsJson,
         authType: 'api-key',
         apiKey: 'test-key',
         accessKeyId: undefined,
@@ -184,8 +213,11 @@ describe('ip-rotate-client', () => {
     });
 
     test('should parse IAM config successfully', () => {
+      const endpointsJson = JSON.stringify({
+        'api.example.com': [{ endpoint: 'https://endpoint1.com', apiKey: 'key1' }],
+      });
       const result = parseIpRotateConfig({
-        endpointsJson: '{"api.example.com":["https://endpoint1.com"]}',
+        endpointsJson,
         authType: 'iam',
         apiKey: undefined,
         accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
@@ -229,8 +261,11 @@ describe('ip-rotate-client', () => {
     });
 
     test('should return error for missing API key', () => {
+      const endpointsJson = JSON.stringify({
+        'api.example.com': [{ endpoint: 'https://endpoint1.com', apiKey: 'key1' }],
+      });
       const result = parseIpRotateConfig({
-        endpointsJson: '{"api.example.com":["https://endpoint1.com"]}',
+        endpointsJson,
         authType: 'api-key',
         apiKey: undefined,
         accessKeyId: undefined,
@@ -244,8 +279,11 @@ describe('ip-rotate-client', () => {
     });
 
     test('should return error for missing IAM credentials', () => {
+      const endpointsJson = JSON.stringify({
+        'api.example.com': [{ endpoint: 'https://endpoint1.com', apiKey: 'key1' }],
+      });
       const result = parseIpRotateConfig({
-        endpointsJson: '{"api.example.com":["https://endpoint1.com"]}',
+        endpointsJson,
         authType: 'iam',
         apiKey: undefined,
         accessKeyId: undefined,
@@ -259,8 +297,11 @@ describe('ip-rotate-client', () => {
     });
 
     test('should default to api-key auth type', () => {
+      const endpointsJson = JSON.stringify({
+        'api.example.com': [{ endpoint: 'https://endpoint1.com', apiKey: 'key1' }],
+      });
       const result = parseIpRotateConfig({
-        endpointsJson: '{"api.example.com":["https://endpoint1.com"]}',
+        endpointsJson,
         authType: undefined,
         apiKey: 'test-key',
         accessKeyId: undefined,

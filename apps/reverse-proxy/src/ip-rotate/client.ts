@@ -2,7 +2,9 @@
 // Execute with bun: wrangler dev
 
 import type {
+  EndpointWithApiKey,
   GetEndpointParams,
+  GetNextEndpointResult,
   IpRotateAuth,
   IpRotateConfig,
   IpRotateEndpoints,
@@ -20,14 +22,16 @@ const ERROR_MISSING_API_KEY = 'IP_ROTATE_API_KEY is required for api-key auth';
 const ERROR_MISSING_IAM_CREDENTIALS = 'AWS credentials are required for IAM auth';
 
 // Pure functions with guard pattern
-const getEndpointList = (config: IpRotateConfig, domain: string): readonly string[] | undefined =>
-  config.endpoints[domain];
+const getEndpointList = (
+  config: IpRotateConfig,
+  domain: string,
+): readonly EndpointWithApiKey[] | undefined => config.endpoints[domain];
 
 const isIpRotateTarget = (config: IpRotateConfig, domain: string): boolean =>
   getEndpointList(config, domain) !== undefined;
 
 const getEndpointCount = (config: IpRotateConfig, domain: string): number => {
-  const endpoints: readonly string[] | undefined = getEndpointList(config, domain);
+  const endpoints: readonly EndpointWithApiKey[] | undefined = getEndpointList(config, domain);
   return endpoints?.length ?? 0;
 };
 
@@ -47,8 +51,11 @@ const getOrInitializeCounter = (
   return initialIndex;
 };
 
-const getNextEndpoint = (params: GetEndpointParams): string | null => {
-  const endpoints: readonly string[] | undefined = getEndpointList(params.config, params.domain);
+const getNextEndpoint = (params: GetEndpointParams): GetNextEndpointResult | null => {
+  const endpoints: readonly EndpointWithApiKey[] | undefined = getEndpointList(
+    params.config,
+    params.domain,
+  );
   if (!endpoints) {
     return null;
   }
@@ -57,12 +64,12 @@ const getNextEndpoint = (params: GetEndpointParams): string | null => {
   }
 
   const current: number = getOrInitializeCounter(params.counters, params.domain, endpoints.length);
-  const endpoint: string | undefined = endpoints[current % endpoints.length];
-  if (!endpoint) {
+  const endpointEntry: EndpointWithApiKey | undefined = endpoints[current % endpoints.length];
+  if (!endpointEntry) {
     return null;
   }
   params.counters.set(params.domain, current + 1);
-  return endpoint;
+  return { endpoint: endpointEntry.endpoint, apiKey: endpointEntry.apiKey };
 };
 
 const buildRewrittenUrl = (endpoint: string, targetUrl: URL): URL =>
@@ -73,13 +80,17 @@ const rewriteUrlForIpRotate = (
   targetUrl: URL,
   counters: Map<string, number>,
 ): RewriteUrlResult => {
-  const endpoint: string | null = getNextEndpoint({ config, domain: targetUrl.host, counters });
-  if (!endpoint) {
+  const endpointResult: GetNextEndpointResult | null = getNextEndpoint({
+    config,
+    domain: targetUrl.host,
+    counters,
+  });
+  if (!endpointResult) {
     return { success: false };
   }
 
-  const rewrittenUrl: URL = buildRewrittenUrl(endpoint, targetUrl);
-  return { success: true, url: rewrittenUrl };
+  const rewrittenUrl: URL = buildRewrittenUrl(endpointResult.endpoint, targetUrl);
+  return { success: true, url: rewrittenUrl, apiKey: endpointResult.apiKey };
 };
 
 const parseEndpointsJson = (json: string): IpRotateEndpoints | null => {

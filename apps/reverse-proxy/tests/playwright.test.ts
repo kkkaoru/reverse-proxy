@@ -673,9 +673,15 @@ it('parseIpRotateConfigFromEnv returns undefined when no endpoints', () => {
 });
 
 it('parseIpRotateConfigFromEnv returns config with valid endpoints', () => {
+  const endpointsJson = JSON.stringify({
+    'example.com': [
+      { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+      { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+    ],
+  });
   const env: PlaywrightCoreEnv = {
     CACHE_VERSION: 'v1',
-    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com","https://api2.example.com"]}',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
     IP_ROTATE_AUTH_TYPE: 'api-key',
     IP_ROTATE_API_KEY: 'test-key',
   };
@@ -690,9 +696,12 @@ it('shouldUseIpRotateForPlaywright returns false when config is undefined', () =
 });
 
 it('shouldUseIpRotateForPlaywright returns true when domain matches', () => {
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
   const env: PlaywrightCoreEnv = {
     CACHE_VERSION: 'v1',
-    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
     IP_ROTATE_AUTH_TYPE: 'api-key',
     IP_ROTATE_API_KEY: 'test-key',
   };
@@ -702,9 +711,12 @@ it('shouldUseIpRotateForPlaywright returns true when domain matches', () => {
 });
 
 it('shouldUseIpRotateForPlaywright returns false when domain does not match', () => {
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
   const env: PlaywrightCoreEnv = {
     CACHE_VERSION: 'v1',
-    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
     IP_ROTATE_AUTH_TYPE: 'api-key',
     IP_ROTATE_API_KEY: 'test-key',
   };
@@ -725,9 +737,12 @@ it('tryFetchWithIpRotate returns null when config is undefined', async () => {
 });
 
 it('tryFetchWithIpRotate returns null when domain does not match', async () => {
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
   const env: PlaywrightCoreEnv = {
     CACHE_VERSION: 'v1',
-    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
     IP_ROTATE_AUTH_TYPE: 'api-key',
     IP_ROTATE_API_KEY: 'test-key',
   };
@@ -744,10 +759,14 @@ it('handleCoreRequest uses ip rotate when configured and domain matches', async 
   mockKV.get.mockResolvedValue(null);
   mockKV.put.mockResolvedValue(undefined);
 
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
+
   const env: PlaywrightCoreEnv = {
     KV: mockKV as unknown as KVNamespace,
     CACHE_VERSION: 'v1',
-    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
     IP_ROTATE_AUTH_TYPE: 'api-key',
     IP_ROTATE_API_KEY: 'test-key',
   };
@@ -821,10 +840,14 @@ it('handleCoreRequest falls back to browser when domain does not match ip rotate
   mockKV.get.mockResolvedValue(null);
   mockKV.put.mockResolvedValue(undefined);
 
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
+
   const env: PlaywrightCoreEnv = {
     KV: mockKV as unknown as KVNamespace,
     CACHE_VERSION: 'v1',
-    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
     IP_ROTATE_AUTH_TYPE: 'api-key',
     IP_ROTATE_API_KEY: 'test-key',
   };

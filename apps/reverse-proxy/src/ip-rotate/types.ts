@@ -2,8 +2,13 @@
 // Execute with bun: wrangler dev
 
 // All interfaces at top
+interface EndpointWithApiKey {
+  readonly endpoint: string;
+  readonly apiKey: string;
+}
+
 interface IpRotateEndpoints {
-  readonly [domain: string]: readonly string[];
+  readonly [domain: string]: readonly EndpointWithApiKey[];
 }
 
 interface IpRotateAuthApiKey {
@@ -28,6 +33,7 @@ interface IpRotateConfig {
 interface RewriteResult {
   readonly success: true;
   readonly url: URL;
+  readonly apiKey: string;
 }
 
 interface RewriteFailure {
@@ -35,6 +41,11 @@ interface RewriteFailure {
 }
 
 type RewriteUrlResult = RewriteResult | RewriteFailure;
+
+interface GetNextEndpointResult {
+  readonly endpoint: string;
+  readonly apiKey: string;
+}
 
 interface GetEndpointParams {
   readonly config: IpRotateConfig;
@@ -94,12 +105,14 @@ interface ParseConfigFailure {
 type ParsedConfig = ParseConfigResult | ParseConfigFailure;
 
 export type {
+  EndpointWithApiKey,
   FetchRetryResult,
   FetchWithAuthParams,
   FetchWithRetryFailure,
   FetchWithRetryParams,
   FetchWithRetryResult,
   GetEndpointParams,
+  GetNextEndpointResult,
   IpRotateAuth,
   IpRotateAuthApiKey,
   IpRotateAuthIam,

@@ -17,18 +17,25 @@ interface DescribeStacksResponse {
   readonly Stacks?: readonly StackDescription[];
 }
 
+interface EndpointWithApiKey {
+  readonly endpoint: string;
+  readonly apiKey: string;
+}
+
 interface EndpointsMap {
-  readonly [domain: string]: readonly string[];
+  readonly [domain: string]: readonly EndpointWithApiKey[];
 }
 
 interface ParsedStackName {
   readonly valid: true;
   readonly domain: string;
+  readonly region: string;
 }
 
 interface InvalidStackName {
   readonly valid: false;
   readonly domain: string;
+  readonly region: string;
 }
 
 type StackNameResult = ParsedStackName | InvalidStackName;
@@ -36,28 +43,48 @@ type StackNameResult = ParsedStackName | InvalidStackName;
 interface StackEndpoint {
   readonly domain: string;
   readonly endpoint: string;
+  readonly apiKeyId: string;
+  readonly region: string;
 }
 
 interface AccumulatorState {
-  readonly acc: Record<string, string[]>;
-  readonly item: StackEndpoint;
+  readonly acc: Record<string, EndpointWithApiKey[]>;
+  readonly item: EndpointWithApiKey & { domain: string };
 }
 
 interface FetchEndpointsParams {
   readonly runCommand: (command: string) => Promise<string>;
 }
 
+interface ApiKeyResponse {
+  readonly value: string;
+}
+
 // Constants at top
 const STACK_NAME_PREFIX = 'IpRotate-';
 const STACK_NAME_SEPARATOR = '-';
 const OUTPUT_KEY_API_ENDPOINT = 'ApiEndpoint';
-const AWS_CLI_DESCRIBE_STACKS = 'aws cloudformation describe-stacks';
+const OUTPUT_KEY_API_KEY_ID = 'ApiKeyId';
+const AWS_CLI_DESCRIBE_STACKS_BASE = 'aws cloudformation describe-stacks';
+const DEFAULT_REGIONS: readonly string[] = [
+  'ap-northeast-1',
+  'ap-northeast-2',
+  'ap-northeast-3',
+  'ap-east-1',
+  'ap-southeast-1',
+];
+const AWS_CLI_GET_API_KEY = 'aws apigateway get-api-key --include-value --api-key';
 const MIN_STACK_NAME_PARTS = 4;
 const REGION_PARTS_COUNT = 3;
 const DOMAIN_SEPARATOR = '.';
 const EMPTY_DOMAIN = '';
+const EMPTY_REGION = '';
 const JSON_INDENT = 2;
-const INVALID_RESULT: InvalidStackName = { valid: false, domain: EMPTY_DOMAIN };
+const INVALID_RESULT: InvalidStackName = {
+  valid: false,
+  domain: EMPTY_DOMAIN,
+  region: EMPTY_REGION,
+};
 
 // Pure functions
 const runAwsCli = async (command: string): Promise<string> => {
@@ -78,9 +105,12 @@ const findOutputValue = (outputs: readonly StackOutput[], key: string): string |
 const buildValidStackName = (stackName: string): StackNameResult => {
   const withoutPrefix: string = stackName.slice(STACK_NAME_PREFIX.length);
   const parts: readonly string[] = withoutPrefix.split(STACK_NAME_SEPARATOR);
+  if (parts.length < MIN_STACK_NAME_PARTS) return INVALID_RESULT;
   const domainParts: readonly string[] = parts.slice(0, -REGION_PARTS_COUNT);
+  const regionParts: readonly string[] = parts.slice(-REGION_PARTS_COUNT);
   const domain: string = domainParts.join(DOMAIN_SEPARATOR);
-  return parts.length < MIN_STACK_NAME_PARTS ? INVALID_RESULT : { valid: true, domain };
+  const region: string = regionParts.join(STACK_NAME_SEPARATOR);
+  return { valid: true, domain, region };
 };
 
 const parseStackName = (stackName: string): StackNameResult =>
@@ -92,42 +122,93 @@ const extractStackEndpoint = (stack: StackDescription): StackEndpoint | null => 
 
   const outputs: readonly StackOutput[] = stack.Outputs ?? [];
   const endpoint: string | undefined = findOutputValue(outputs, OUTPUT_KEY_API_ENDPOINT);
-  return endpoint ? { domain: parsed.domain, endpoint } : null;
+  const apiKeyId: string | undefined = findOutputValue(outputs, OUTPUT_KEY_API_KEY_ID);
+  if (!(endpoint && apiKeyId)) return null;
+  return { domain: parsed.domain, endpoint, apiKeyId, region: parsed.region };
 };
 
-const addEndpointToAccumulator = (state: AccumulatorState): Record<string, string[]> =>
-  state.acc[state.item.domain]
-    ? (() => {
-        state.acc[state.item.domain]?.push(state.item.endpoint);
-        return state.acc;
-      })()
-    : (() => {
-        state.acc[state.item.domain] = [state.item.endpoint];
-        return state.acc;
-      })();
+const addEndpointToAccumulator = (
+  state: AccumulatorState,
+): Record<string, EndpointWithApiKey[]> => {
+  const { domain, endpoint, apiKey } = state.item;
+  const entry: EndpointWithApiKey = { endpoint, apiKey };
+  if (state.acc[domain]) {
+    state.acc[domain]?.push(entry);
+  } else {
+    state.acc[domain] = [entry];
+  }
+  return state.acc;
+};
 
-const groupEndpointsByDomain = (endpoints: readonly StackEndpoint[]): EndpointsMap =>
-  endpoints.reduce<Record<string, string[]>>(
-    (acc: Record<string, string[]>, item: StackEndpoint): Record<string, string[]> =>
-      addEndpointToAccumulator({ acc, item }),
+const groupEndpointsByDomain = (
+  endpoints: readonly (EndpointWithApiKey & { domain: string })[],
+): EndpointsMap =>
+  endpoints.reduce<Record<string, EndpointWithApiKey[]>>(
+    (
+      acc: Record<string, EndpointWithApiKey[]>,
+      item: EndpointWithApiKey & { domain: string },
+    ): Record<string, EndpointWithApiKey[]> => addEndpointToAccumulator({ acc, item }),
     {},
   );
 
-const collectEndpoints = (stacks: readonly StackDescription[]): EndpointsMap =>
-  groupEndpointsByDomain(
-    stacks
-      .map(extractStackEndpoint)
-      .filter((item: StackEndpoint | null): item is StackEndpoint => item !== null),
+const fetchApiKeyValue = async (
+  runCommand: (command: string) => Promise<string>,
+  apiKeyId: string,
+  region: string,
+): Promise<string> => {
+  const command = `${AWS_CLI_GET_API_KEY} ${apiKeyId} --region ${region}`;
+  const output: string = await runCommand(command);
+  const response: ApiKeyResponse = JSON.parse(output);
+  return response.value;
+};
+
+const collectEndpointsWithApiKeys = async (
+  stacks: readonly StackDescription[],
+  runCommand: (command: string) => Promise<string>,
+): Promise<EndpointsMap> => {
+  const stackEndpoints: readonly StackEndpoint[] = stacks
+    .map(extractStackEndpoint)
+    .filter((item: StackEndpoint | null): item is StackEndpoint => item !== null);
+
+  const endpointsWithApiKeys: (EndpointWithApiKey & { domain: string })[] = await Promise.all(
+    stackEndpoints.map(async (item: StackEndpoint) => {
+      const apiKey: string = await fetchApiKeyValue(runCommand, item.apiKeyId, item.region);
+      return { domain: item.domain, endpoint: item.endpoint, apiKey };
+    }),
   );
+
+  return groupEndpointsByDomain(endpointsWithApiKeys);
+};
 
 const formatEndpointsJson = (endpoints: EndpointsMap): string =>
   JSON.stringify(endpoints, null, JSON_INDENT);
 
-const fetchAndCollectEndpoints = async (params: FetchEndpointsParams): Promise<EndpointsMap> => {
-  const output: string = await params.runCommand(AWS_CLI_DESCRIBE_STACKS);
+const fetchStacksFromRegion = async (
+  runCommand: (command: string) => Promise<string>,
+  region: string,
+): Promise<readonly StackDescription[]> => {
+  const command = `${AWS_CLI_DESCRIBE_STACKS_BASE} --region ${region}`;
+  const output: string = await runCommand(command);
   const response: DescribeStacksResponse = parseDescribeStacksOutput(output);
-  const stacks: readonly StackDescription[] = response.Stacks ?? [];
-  return collectEndpoints(stacks);
+  return response.Stacks ?? [];
+};
+
+const fetchStacksFromAllRegions = async (
+  runCommand: (command: string) => Promise<string>,
+  regions: readonly string[],
+): Promise<readonly StackDescription[]> => {
+  const stacksPerRegion: readonly (readonly StackDescription[])[] = await Promise.all(
+    regions.map((region: string) => fetchStacksFromRegion(runCommand, region)),
+  );
+  return stacksPerRegion.flat();
+};
+
+const fetchAndCollectEndpoints = async (params: FetchEndpointsParams): Promise<EndpointsMap> => {
+  const stacks: readonly StackDescription[] = await fetchStacksFromAllRegions(
+    params.runCommand,
+    DEFAULT_REGIONS,
+  );
+  return collectEndpointsWithApiKeys(stacks, params.runCommand);
 };
 
 const main = async (): Promise<void> => {
@@ -140,9 +221,10 @@ const main = async (): Promise<void> => {
 export {
   addEndpointToAccumulator,
   buildValidStackName,
-  collectEndpoints,
+  collectEndpointsWithApiKeys,
   extractStackEndpoint,
   fetchAndCollectEndpoints,
+  fetchApiKeyValue,
   findOutputValue,
   formatEndpointsJson,
   groupEndpointsByDomain,
@@ -151,7 +233,9 @@ export {
 };
 export type {
   AccumulatorState,
+  ApiKeyResponse,
   DescribeStacksResponse,
+  EndpointWithApiKey,
   EndpointsMap,
   FetchEndpointsParams,
   StackDescription,
