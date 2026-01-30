@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=all
 # Generate wrangler.toml from template and .dev.vars
 
 set -e
