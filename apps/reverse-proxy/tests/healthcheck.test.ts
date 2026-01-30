@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { app } from '../src/app.ts';
-import { HEALTHCHECK_PATH } from '../src/healthcheck.ts';
+import { HEALTHCHECK_PATH } from '../src/routes/healthcheck.ts';
 import { setupEnvironment } from './helpers.ts';
 
 describe('healthcheck', () => {

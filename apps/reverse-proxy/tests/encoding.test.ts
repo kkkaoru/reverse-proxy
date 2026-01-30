@@ -9,7 +9,7 @@ import {
   extractCharsetFromContentTypeForTest,
   isHtmlContentTypeForTest,
   normalizeEncodingNameForTest,
-} from '../src/encoding.ts';
+} from '../src/utils/encoding.ts';
 
 const CONTENT_TYPE_HTML_UTF8: string = 'text/html; charset=utf-8';
 const CONTENT_TYPE_HTML_EUCJP: string = 'text/html; charset=euc-jp';

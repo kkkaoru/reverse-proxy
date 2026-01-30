@@ -1,74 +1,71 @@
-// Test file for playwright.ts
+// Test file for playwright.core.ts
+// Tests the core logic without browser dependency
 // Execute with bun: bun run test
 
-import { afterEach, beforeEach, expect, it, type MockInstance, vi } from 'vitest';
-import { handlePlaywrightRequest, PLAYWRIGHT_PATH, type PlaywrightEnv } from '../src/playwright.ts';
+import { beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
+import type {
+  CachedContent,
+  FetchPageResponse,
+  PlaywrightCoreEnv,
+} from '../src/playwright/core.ts';
+import {
+  CACHE_HIT,
+  CACHE_MISS,
+  CACHE_TTL_SECONDS,
+  CONTENT_TYPE_HTML,
+  CONTENT_TYPE_JSON,
+  createCacheKey,
+  createContentResponse,
+  createErrorResponse,
+  createJsonResponse,
+  delay,
+  deleteKvCache,
+  ERROR_INVALID_URL,
+  ERROR_MISSING_URL,
+  getCachedContent,
+  getErrorMessage,
+  handleCoreRequest,
+  handleDeleteRequest,
+  handleFetchError,
+  handleFetchSuccess,
+  isCacheableStatus,
+  isFetchSuccess,
+  isHtmlContentType,
+  isLoggingEnabled,
+  isValidUrl,
+  LOG_PREFIX,
+  logEvent,
+  PLAYWRIGHT_PATH,
+  parseCachedContent,
+  parseRequest,
+  STATUS_BAD_GATEWAY,
+  STATUS_BAD_REQUEST,
+  STATUS_NOT_FOUND,
+  STATUS_OK,
+  setCachedContent,
+  shouldCache,
+  shouldLogCacheSkip,
+  tryGetCached,
+  validateRequest,
+} from '../src/playwright/core.ts';
 
 interface MockKVNamespace {
   get: MockInstance;
   put: MockInstance;
+  delete: MockInstance;
 }
-
-interface MockResponse {
-  status: () => number;
-  headers: () => Record<string, string>;
-  text: () => Promise<string>;
-}
-
-interface MockPage {
-  goto: MockInstance;
-  content: MockInstance;
-}
-
-interface MockContext {
-  newPage: MockInstance;
-  close: MockInstance;
-}
-
-interface MockBrowser {
-  newContext: MockInstance;
-  close: MockInstance;
-}
-
-const CONTENT_TYPE_HTML: string = 'text/html; charset=utf-8';
-const CONTENT_TYPE_JSON: string = 'application/json; charset=utf-8';
 
 const createMockKV = (): MockKVNamespace => ({
   get: vi.fn(),
   put: vi.fn(),
-});
-
-const createMockResponse = (
-  content: string,
-  status: number,
-  contentType: string,
-): MockResponse => ({
-  status: (): number => status,
-  headers: (): Record<string, string> => ({ 'content-type': contentType }),
-  text: (): Promise<string> => Promise.resolve(content),
-});
-
-const createMockPage = (content: string, status: number, contentType: string): MockPage => ({
-  goto: vi.fn().mockResolvedValue(createMockResponse(content, status, contentType)),
-  content: vi.fn().mockResolvedValue(content),
-});
-
-const createMockContext = (page: MockPage): MockContext => ({
-  newPage: vi.fn().mockResolvedValue(page),
-  close: vi.fn().mockResolvedValue(undefined),
-});
-
-const createMockBrowser = (context: MockContext): MockBrowser => ({
-  newContext: vi.fn().mockResolvedValue(context),
-  close: vi.fn().mockResolvedValue(undefined),
+  delete: vi.fn(),
 });
 
 const createMockEnv = (
   kv?: MockKVNamespace,
   logRequests?: string,
   cacheVersion: string = 'v5',
-): PlaywrightEnv => ({
-  BROWSER: {} as PlaywrightEnv['BROWSER'],
+): PlaywrightCoreEnv => ({
   KV: kv as unknown as KVNamespace,
   LOG_REQUESTS: logRequests,
   CACHE_VERSION: cacheVersion,
@@ -80,302 +77,586 @@ const createRequest = (url: string): Request =>
 const createRequestWithParams = (params: string): Request =>
   new Request(`http://localhost${PLAYWRIGHT_PATH}?${params}`);
 
-vi.mock('@cloudflare/playwright', () => ({
-  launch: vi.fn(),
-}));
-
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-it('PLAYWRIGHT_PATH exports correct path constant', () => {
-  expect(PLAYWRIGHT_PATH).toBe('/playwright');
-});
-
-it('returns 400 when url parameter is missing', async () => {
-  const env: PlaywrightEnv = createMockEnv();
-  const request: Request = new Request(`http://localhost${PLAYWRIGHT_PATH}`);
-
-  const response: Response = await handlePlaywrightRequest(request, env);
-
-  expect(response.status).toBe(400);
-  const body = await response.json();
-  expect(body).toStrictEqual({ error: 'Query parameter "url" is required.' });
-});
-
-it('returns 400 when url parameter is invalid', async () => {
-  const env: PlaywrightEnv = createMockEnv();
-  const request: Request = createRequestWithParams('url=not-a-valid-url');
-
-  const response: Response = await handlePlaywrightRequest(request, env);
-
-  expect(response.status).toBe(400);
-  const body = await response.json();
-  expect(body).toStrictEqual({ error: 'Query parameter "url" must be a valid absolute URL.' });
-});
-
-it('returns cached content with x-cache HIT header when cache exists', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  const cachedData: string = JSON.stringify({
-    content: '<html>cached</html>',
-    contentType: CONTENT_TYPE_HTML,
+describe('constants', () => {
+  it('PLAYWRIGHT_PATH exports correct path constant', () => {
+    expect(PLAYWRIGHT_PATH).toBe('/playwright');
   });
-  mockKV.get.mockResolvedValue(cachedData);
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/page');
-
-  const response: Response = await handlePlaywrightRequest(request, env);
-
-  expect(response.status).toBe(200);
-  expect(response.headers.get('x-cache')).toBe('HIT');
-  expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
-  const body: string = await response.text();
-  expect(body).toBe('<html>cached</html>');
-});
-
-it('returns cached JSON content with correct content-type', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  const cachedData: string = JSON.stringify({
-    content: '{"data":"cached"}',
-    contentType: CONTENT_TYPE_JSON,
+  it('CACHE_TTL_SECONDS is 5 days', () => {
+    expect(CACHE_TTL_SECONDS).toBe(432000);
   });
-  mockKV.get.mockResolvedValue(cachedData);
-
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/api');
-
-  const response: Response = await handlePlaywrightRequest(request, env);
-
-  expect(response.status).toBe(200);
-  expect(response.headers.get('x-cache')).toBe('HIT');
-  expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
-  const body: string = await response.text();
-  expect(body).toBe('{"data":"cached"}');
 });
 
-it('skips cache when disable_kv is true', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(
-    JSON.stringify({ content: '<html>cached</html>', contentType: CONTENT_TYPE_HTML }),
-  );
+describe('type guards', () => {
+  it('isFetchSuccess returns true for successful result', () => {
+    const result: FetchPageResponse = { content: 'html', contentType: 'text/html', status: 200 };
+    expect(isFetchSuccess(result)).toBe(true);
+  });
 
-  const mockPage: MockPage = createMockPage('<html>fresh</html>', 200, CONTENT_TYPE_HTML);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
+  it('isFetchSuccess returns false for error result', () => {
+    const result: FetchPageResponse = { error: 'failed' };
+    expect(isFetchSuccess(result)).toBe(false);
+  });
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
+  it('isCacheableStatus returns true for 2xx and 3xx', () => {
+    expect(isCacheableStatus(200)).toBe(true);
+    expect(isCacheableStatus(301)).toBe(true);
+    expect(isCacheableStatus(399)).toBe(true);
+  });
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequestWithParams('url=https://example.com/page&disable_kv=true');
-
-  const response: Response = await handlePlaywrightRequest(request, env);
-
-  expect(response.status).toBe(200);
-  expect(response.headers.get('x-cache')).toBe('MISS');
-  expect(mockKV.get).not.toHaveBeenCalled();
+  it('isCacheableStatus returns false for 4xx and 5xx', () => {
+    expect(isCacheableStatus(400)).toBe(false);
+    expect(isCacheableStatus(404)).toBe(false);
+    expect(isCacheableStatus(500)).toBe(false);
+  });
 });
 
-it('skips cache when disable_cache is true', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(
-    JSON.stringify({ content: '<html>cached</html>', contentType: CONTENT_TYPE_HTML }),
-  );
+describe('utility functions', () => {
+  it('isValidUrl returns true for valid URLs', () => {
+    expect(isValidUrl('https://example.com')).toBe(true);
+    expect(isValidUrl('http://localhost:3000/path')).toBe(true);
+  });
 
-  const mockPage: MockPage = createMockPage('<html>fresh</html>', 200, CONTENT_TYPE_HTML);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
+  it('isValidUrl returns false for invalid URLs', () => {
+    expect(isValidUrl('not-a-url')).toBe(false);
+    expect(isValidUrl('')).toBe(false);
+  });
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
+  it('isHtmlContentType returns true for HTML content types', () => {
+    expect(isHtmlContentType('text/html')).toBe(true);
+    expect(isHtmlContentType('text/html; charset=utf-8')).toBe(true);
+    expect(isHtmlContentType('TEXT/HTML')).toBe(true);
+  });
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequestWithParams(
-    'url=https://example.com/page&disable_cache=true',
-  );
+  it('isHtmlContentType returns false for non-HTML content types', () => {
+    expect(isHtmlContentType('application/json')).toBe(false);
+    expect(isHtmlContentType('text/plain')).toBe(false);
+  });
 
-  const response: Response = await handlePlaywrightRequest(request, env);
+  it('getErrorMessage extracts message from Error', () => {
+    expect(getErrorMessage(new Error('test error'))).toBe('test error');
+  });
 
-  expect(response.status).toBe(200);
-  expect(response.headers.get('x-cache')).toBe('MISS');
-  expect(mockKV.get).not.toHaveBeenCalled();
+  it('getErrorMessage returns default for non-Error', () => {
+    expect(getErrorMessage('string error')).toBe('Unknown error during page fetch');
+    expect(getErrorMessage(null)).toBe('Unknown error during page fetch');
+  });
+
+  it('createCacheKey creates correct format', () => {
+    expect(createCacheKey('https://example.com', 'v5')).toBe('playwright-v5::https://example.com');
+  });
+
+  it('parseCachedContent parses JSON correctly', () => {
+    const json = JSON.stringify({ content: 'html', contentType: 'text/html' });
+    expect(parseCachedContent(json)).toEqual({ content: 'html', contentType: 'text/html' });
+  });
+
+  it('delay resolves after timeout', async () => {
+    const start = Date.now();
+    await delay(50);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(45);
+  });
 });
 
-it('fetches HTML page and caches on cache miss', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(null);
-  mockKV.put.mockResolvedValue(undefined);
+describe('logging', () => {
+  it('isLoggingEnabled returns true when LOG_REQUESTS is TRUE', () => {
+    expect(isLoggingEnabled({ LOG_REQUESTS: 'TRUE', CACHE_VERSION: 'v1' })).toBe(true);
+    expect(isLoggingEnabled({ LOG_REQUESTS: 'true', CACHE_VERSION: 'v1' })).toBe(true);
+  });
 
-  const mockPage: MockPage = createMockPage('<html>fetched</html>', 200, CONTENT_TYPE_HTML);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
+  it('isLoggingEnabled returns false when LOG_REQUESTS is not set', () => {
+    expect(isLoggingEnabled({ CACHE_VERSION: 'v1' })).toBe(false);
+    expect(isLoggingEnabled({ LOG_REQUESTS: 'false', CACHE_VERSION: 'v1' })).toBe(false);
+  });
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
+  it('logEvent logs when logging is enabled', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const env = createMockEnv(undefined, 'TRUE');
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/page');
+    logEvent(env, 'test-event', { target: 'test' });
 
-  const response: Response = await handlePlaywrightRequest(request, env);
+    expect(consoleSpy).toHaveBeenCalledWith(LOG_PREFIX, 'test-event', { target: 'test' });
+    consoleSpy.mockRestore();
+  });
 
-  expect(response.status).toBe(200);
-  expect(response.headers.get('x-cache')).toBe('MISS');
-  expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
-  const body: string = await response.text();
-  expect(body).toBe('<html>fetched</html>');
-  expect(mockKV.put).toHaveBeenCalled();
+  it('logEvent does not log when logging is disabled', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const env = createMockEnv();
+
+    logEvent(env, 'test-event', { target: 'test' });
+
+    expect(consoleSpy).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
 });
 
-it('fetches JSON response and returns raw body without HTML wrapper', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(null);
-  mockKV.put.mockResolvedValue(undefined);
+describe('response creation', () => {
+  it('createContentResponse creates response with correct headers', async () => {
+    const response = createContentResponse({
+      content: '<html>test</html>',
+      contentType: CONTENT_TYPE_HTML,
+      cacheStatus: CACHE_HIT,
+    });
 
-  const jsonContent: string = '{"results":[{"id":1}]}';
-  const mockPage: MockPage = createMockPage(jsonContent, 200, CONTENT_TYPE_JSON);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
+    expect(response.status).toBe(STATUS_OK);
+    expect(response.headers.get('content-type')).toBe(CONTENT_TYPE_HTML);
+    expect(response.headers.get('x-cache')).toBe(CACHE_HIT);
+    expect(await response.text()).toBe('<html>test</html>');
+  });
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
+  it('createErrorResponse creates JSON error response', async () => {
+    const response = createErrorResponse('test error', STATUS_BAD_REQUEST);
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/api/data');
+    expect(response.status).toBe(STATUS_BAD_REQUEST);
+    expect(response.headers.get('content-type')).toBe(CONTENT_TYPE_JSON);
+    expect(await response.json()).toEqual({ error: 'test error' });
+  });
 
-  const response: Response = await handlePlaywrightRequest(request, env);
+  it('createJsonResponse creates JSON response', async () => {
+    const response = createJsonResponse({ key: 'value' }, STATUS_OK);
 
-  expect(response.status).toBe(200);
-  expect(response.headers.get('x-cache')).toBe('MISS');
-  expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
-  const body: string = await response.text();
-  expect(body).toBe('{"results":[{"id":1}]}');
-  expect(mockPage.content).not.toHaveBeenCalled();
+    expect(response.status).toBe(STATUS_OK);
+    expect(response.headers.get('content-type')).toBe(CONTENT_TYPE_JSON);
+    expect(await response.json()).toEqual({ key: 'value' });
+  });
 });
 
-it('does not cache 4xx responses', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(null);
+describe('KV operations', () => {
+  it('getCachedContent returns parsed content when exists', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(JSON.stringify({ content: 'html', contentType: 'text/html' }));
 
-  const mockPage: MockPage = createMockPage('<html>not found</html>', 404, CONTENT_TYPE_HTML);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
+    const result = await getCachedContent(mockKV as unknown as KVNamespace, 'test-key');
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
+    expect(result).toEqual({ content: 'html', contentType: 'text/html' });
+    expect(mockKV.get).toHaveBeenCalledWith('test-key', 'text');
+  });
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/missing');
+  it('getCachedContent returns null when not found', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
 
-  const response: Response = await handlePlaywrightRequest(request, env);
+    const result = await getCachedContent(mockKV as unknown as KVNamespace, 'test-key');
 
-  expect(response.status).toBe(200);
-  expect(mockKV.put).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
+  it('setCachedContent stores with TTL', async () => {
+    const mockKV = createMockKV();
+    mockKV.put.mockResolvedValue(undefined);
+
+    await setCachedContent({
+      kv: mockKV as unknown as KVNamespace,
+      cacheKey: 'test-key',
+      data: { content: 'html', contentType: 'text/html' },
+    });
+
+    expect(mockKV.put).toHaveBeenCalledWith(
+      'test-key',
+      JSON.stringify({ content: 'html', contentType: 'text/html' }),
+      { expirationTtl: CACHE_TTL_SECONDS },
+    );
+  });
+
+  it('deleteKvCache returns false when KV is undefined', async () => {
+    const result = await deleteKvCache(undefined, 'test-key');
+    expect(result).toBe(false);
+  });
+
+  it('deleteKvCache returns false when key does not exist', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
+
+    const result = await deleteKvCache(mockKV as unknown as KVNamespace, 'test-key');
+
+    expect(result).toBe(false);
+    expect(mockKV.delete).not.toHaveBeenCalled();
+  });
+
+  it('deleteKvCache deletes and returns true when key exists', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue('some-content');
+    mockKV.delete.mockResolvedValue(undefined);
+
+    const result = await deleteKvCache(mockKV as unknown as KVNamespace, 'test-key');
+
+    expect(result).toBe(true);
+    expect(mockKV.delete).toHaveBeenCalledWith('test-key');
+  });
 });
 
-it('returns 502 when browser fetch fails after retries', async () => {
-  vi.useFakeTimers();
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(null);
+describe('request parsing and validation', () => {
+  it('parseRequest extracts URL and flags', () => {
+    const request = createRequestWithParams('url=https://example.com&disable_kv=true');
+    const result = parseRequest(request);
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Browser launch failed'));
+    expect(result.targetUrl).toBe('https://example.com');
+    expect(result.disableKv).toBe(true);
+    expect(result.disableCache).toBe(false);
+  });
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/page');
+  it('parseRequest handles disable_cache flag', () => {
+    const request = createRequestWithParams('url=https://example.com&disable_cache=true');
+    const result = parseRequest(request);
 
-  const responsePromise: Promise<Response> = handlePlaywrightRequest(request, env);
+    expect(result.disableCache).toBe(true);
+  });
 
-  await vi.runAllTimersAsync();
+  it('validateRequest returns error for missing URL', () => {
+    const env = createMockEnv();
+    const response = validateRequest(env, null);
 
-  const response: Response = await responsePromise;
+    expect(response).not.toBeNull();
+    expect(response?.status).toBe(STATUS_BAD_REQUEST);
+  });
 
-  expect(response.status).toBe(502);
-  const body = await response.json();
-  expect(body).toStrictEqual({ error: 'Browser fetch failed: Browser launch failed' });
-  vi.useRealTimers();
+  it('validateRequest returns error for invalid URL', () => {
+    const env = createMockEnv();
+    const response = validateRequest(env, 'not-a-url');
+
+    expect(response).not.toBeNull();
+    expect(response?.status).toBe(STATUS_BAD_REQUEST);
+  });
+
+  it('validateRequest returns null for valid URL', () => {
+    const env = createMockEnv();
+    const response = validateRequest(env, 'https://example.com');
+
+    expect(response).toBeNull();
+  });
 });
 
-it('logs events when LOG_REQUESTS is TRUE', async () => {
-  const consoleSpy: MockInstance = vi.spyOn(console, 'log').mockImplementation(() => {});
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(
-    JSON.stringify({ content: '<html>cached</html>', contentType: CONTENT_TYPE_HTML }),
-  );
+describe('cache helpers', () => {
+  it('shouldCache returns true when conditions are met', () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
 
-  const env: PlaywrightEnv = createMockEnv(mockKV, 'TRUE');
-  const request: Request = createRequest('https://example.com/page');
+    expect(shouldCache(env, 200, false)).toBe(true);
+  });
 
-  await handlePlaywrightRequest(request, env);
+  it('shouldCache returns false when disableKv is true', () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
 
-  expect(consoleSpy).toHaveBeenCalled();
-  consoleSpy.mockRestore();
+    expect(shouldCache(env, 200, true)).toBe(false);
+  });
+
+  it('shouldCache returns false when KV is undefined', () => {
+    const env = createMockEnv();
+    expect(shouldCache(env, 200, false)).toBe(false);
+  });
+
+  it('shouldCache returns false for 4xx status', () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
+
+    expect(shouldCache(env, 404, false)).toBe(false);
+  });
+
+  it('shouldLogCacheSkip returns true when KV exists and status is 4xx', () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
+
+    expect(shouldLogCacheSkip(env, 404)).toBe(true);
+  });
+
+  it('shouldLogCacheSkip returns false when KV is undefined', () => {
+    const env = createMockEnv();
+    expect(shouldLogCacheSkip(env, 404)).toBe(false);
+  });
 });
 
-it('does not log events when LOG_REQUESTS is not set', async () => {
-  const consoleSpy: MockInstance = vi.spyOn(console, 'log').mockImplementation(() => {});
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(
-    JSON.stringify({ content: '<html>cached</html>', contentType: CONTENT_TYPE_HTML }),
-  );
+describe('tryGetCached', () => {
+  it('returns null when disableKv is true', async () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
 
-  const env: PlaywrightEnv = createMockEnv(mockKV);
-  const request: Request = createRequest('https://example.com/page');
+    const result = await tryGetCached({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: true,
+      disableCache: false,
+    });
 
-  await handlePlaywrightRequest(request, env);
+    expect(result).toBeNull();
+    expect(mockKV.get).not.toHaveBeenCalled();
+  });
 
-  expect(consoleSpy).not.toHaveBeenCalled();
-  consoleSpy.mockRestore();
+  it('returns null when disableCache is true', async () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
+
+    const result = await tryGetCached({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: true,
+    });
+
+    expect(result).toBeNull();
+    expect(mockKV.get).not.toHaveBeenCalled();
+  });
+
+  it('returns null when KV is undefined', async () => {
+    const env = createMockEnv();
+
+    const result = await tryGetCached({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: false,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null and logs cache-miss when not found', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
+    const env = createMockEnv(mockKV, 'TRUE');
+
+    const result = await tryGetCached({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: false,
+    });
+
+    expect(result).toBeNull();
+    expect(consoleSpy).toHaveBeenCalledWith(LOG_PREFIX, 'cache-miss', expect.any(Object));
+    consoleSpy.mockRestore();
+  });
+
+  it('returns cached response on hit', async () => {
+    const mockKV = createMockKV();
+    const cachedData: CachedContent = {
+      content: '<html>cached</html>',
+      contentType: CONTENT_TYPE_HTML,
+    };
+    mockKV.get.mockResolvedValue(JSON.stringify(cachedData));
+    const env = createMockEnv(mockKV);
+
+    const result = await tryGetCached({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: false,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.status).toBe(STATUS_OK);
+    expect(result?.headers.get('x-cache')).toBe(CACHE_HIT);
+    expect(await result?.text()).toBe('<html>cached</html>');
+  });
 });
 
-it('uses custom cache version from env when CACHE_VERSION is set', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(null);
-  mockKV.put.mockResolvedValue(undefined);
+describe('handleFetchError', () => {
+  it('returns 502 with error message', async () => {
+    const env = createMockEnv();
+    const response = handleFetchError(env, 'https://example.com', 'connection failed');
 
-  const mockPage: MockPage = createMockPage('<html>fetched</html>', 200, CONTENT_TYPE_HTML);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
-
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
-
-  const env: PlaywrightEnv = createMockEnv(mockKV, undefined, 'v10');
-  const request: Request = createRequest('https://example.com');
-
-  await handlePlaywrightRequest(request, env);
-
-  expect(mockKV.put).toHaveBeenCalledWith(
-    'playwright-v10::https://example.com',
-    expect.any(String),
-    expect.objectContaining({ expirationTtl: 432000 }),
-  );
+    expect(response.status).toBe(STATUS_BAD_GATEWAY);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('Browser fetch failed: connection failed');
+  });
 });
 
-it('sets cache TTL to 5 days when storing in KV', async () => {
-  const mockKV: MockKVNamespace = createMockKV();
-  mockKV.get.mockResolvedValue(null);
-  mockKV.put.mockResolvedValue(undefined);
+describe('handleFetchSuccess', () => {
+  it('caches and returns response for successful fetch', async () => {
+    const mockKV = createMockKV();
+    mockKV.put.mockResolvedValue(undefined);
+    const env = createMockEnv(mockKV);
 
-  const mockPage: MockPage = createMockPage('<html>fetched</html>', 200, CONTENT_TYPE_HTML);
-  const mockContext: MockContext = createMockContext(mockPage);
-  const mockBrowser: MockBrowser = createMockBrowser(mockContext);
+    const response = await handleFetchSuccess({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      content: '<html>content</html>',
+      contentType: CONTENT_TYPE_HTML,
+      status: 200,
+      disableKv: false,
+    });
 
-  const { launch } = await import('@cloudflare/playwright');
-  (launch as ReturnType<typeof vi.fn>).mockResolvedValue(mockBrowser);
+    expect(response.status).toBe(STATUS_OK);
+    expect(response.headers.get('x-cache')).toBe(CACHE_MISS);
+    expect(mockKV.put).toHaveBeenCalled();
+  });
 
-  const env: PlaywrightEnv = createMockEnv(mockKV, undefined, 'v5');
-  const request: Request = createRequest('https://example.com/page');
+  it('does not cache when disableKv is true', async () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
 
-  await handlePlaywrightRequest(request, env);
+    await handleFetchSuccess({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      content: '<html>content</html>',
+      contentType: CONTENT_TYPE_HTML,
+      status: 200,
+      disableKv: true,
+    });
 
-  expect(mockKV.put).toHaveBeenCalledWith(
-    'playwright-v5::https://example.com/page',
-    expect.any(String),
-    expect.objectContaining({ expirationTtl: 432000 }),
-  );
+    expect(mockKV.put).not.toHaveBeenCalled();
+  });
+
+  it('does not cache 4xx responses', async () => {
+    const mockKV = createMockKV();
+    const env = createMockEnv(mockKV);
+
+    await handleFetchSuccess({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      content: 'not found',
+      contentType: CONTENT_TYPE_HTML,
+      status: 404,
+      disableKv: false,
+    });
+
+    expect(mockKV.put).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleCoreRequest', () => {
+  it('returns cached response when available', async () => {
+    const mockKV = createMockKV();
+    const cachedData: CachedContent = {
+      content: '<html>cached</html>',
+      contentType: CONTENT_TYPE_HTML,
+    };
+    mockKV.get.mockResolvedValue(JSON.stringify(cachedData));
+    const env = createMockEnv(mockKV);
+    const fetchPage = vi.fn();
+
+    const response = await handleCoreRequest({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: false,
+      fetchPage,
+    });
+
+    expect(response.headers.get('x-cache')).toBe(CACHE_HIT);
+    expect(fetchPage).not.toHaveBeenCalled();
+  });
+
+  it('fetches and returns response on cache miss', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
+    mockKV.put.mockResolvedValue(undefined);
+    const env = createMockEnv(mockKV);
+    const fetchPage = vi.fn().mockResolvedValue({
+      content: '<html>fetched</html>',
+      contentType: CONTENT_TYPE_HTML,
+      status: 200,
+    });
+
+    const response = await handleCoreRequest({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: false,
+      fetchPage,
+    });
+
+    expect(response.status).toBe(STATUS_OK);
+    expect(response.headers.get('x-cache')).toBe(CACHE_MISS);
+    expect(fetchPage).toHaveBeenCalled();
+    expect(await response.text()).toBe('<html>fetched</html>');
+  });
+
+  it('returns error response on fetch failure', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
+    const env = createMockEnv(mockKV);
+    const fetchPage = vi.fn().mockResolvedValue({ error: 'fetch failed' });
+
+    const response = await handleCoreRequest({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      disableKv: false,
+      disableCache: false,
+      fetchPage,
+    });
+
+    expect(response.status).toBe(STATUS_BAD_GATEWAY);
+  });
+});
+
+describe('handleDeleteRequest', () => {
+  it('returns 400 for missing URL', async () => {
+    const env = createMockEnv();
+    const request = new Request(`http://localhost${PLAYWRIGHT_PATH}`);
+
+    const response = await handleDeleteRequest(request, env);
+
+    expect(response.status).toBe(STATUS_BAD_REQUEST);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe(ERROR_MISSING_URL);
+  });
+
+  it('returns 400 for invalid URL', async () => {
+    const env = createMockEnv();
+    const request = createRequestWithParams('url=not-valid');
+
+    const response = await handleDeleteRequest(request, env);
+
+    expect(response.status).toBe(STATUS_BAD_REQUEST);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe(ERROR_INVALID_URL);
+  });
+
+  it('returns 404 when cache entry does not exist', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
+    const env = createMockEnv(mockKV);
+    const request = createRequest('https://example.com');
+
+    const response = await handleDeleteRequest(request, env);
+
+    expect(response.status).toBe(STATUS_NOT_FOUND);
+    const body = (await response.json()) as { deleted: boolean; kvDeleted: boolean };
+    expect(body.deleted).toBe(false);
+    expect(body.kvDeleted).toBe(false);
+  });
+
+  it('returns 200 when cache entry is deleted', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue('cached-content');
+    mockKV.delete.mockResolvedValue(undefined);
+    const env = createMockEnv(mockKV);
+    const request = createRequest('https://example.com');
+
+    const response = await handleDeleteRequest(request, env);
+
+    expect(response.status).toBe(STATUS_OK);
+    const body = (await response.json()) as { deleted: boolean; kvDeleted: boolean };
+    expect(body.deleted).toBe(true);
+    expect(body.kvDeleted).toBe(true);
+  });
+
+  it('uses correct cache key format with cache version', async () => {
+    const mockKV = createMockKV();
+    mockKV.get.mockResolvedValue(null);
+    const env = createMockEnv(mockKV, undefined, 'v10');
+    const request = createRequest('https://example.com/page');
+
+    await handleDeleteRequest(request, env);
+
+    expect(mockKV.get).toHaveBeenCalledWith('playwright-v10::https://example.com/page', 'text');
+  });
 });

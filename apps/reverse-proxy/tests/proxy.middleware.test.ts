@@ -1,11 +1,8 @@
 import { Hono } from 'hono';
 import iconv from 'iconv-lite';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  createProxyCacheMiddleware,
-  type ProxyCacheEnv,
-  type ProxyCacheStaticOptions,
-} from '../src/middleware.ts';
+import { createProxyCacheMiddleware } from '../src/proxy/middleware.ts';
+import type { ProxyCacheEnv, ProxyCacheStaticOptions } from '../src/proxy/types.ts';
 import { setupEnvironment } from './helpers.ts';
 
 const CONTENT_TYPE_HTML_EUCJP: string = 'text/html; charset=euc-jp';
