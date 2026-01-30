@@ -190,7 +190,7 @@
       }
     },
     {
-      "includes": ["apps/reverse-proxy/src/encoding.ts"],
+      "includes": ["apps/reverse-proxy/src/utils/encoding.ts"],
       "linter": {
         "rules": {
           "nursery": {
@@ -200,12 +200,69 @@
       }
     },
     {
-      "includes": ["apps/reverse-proxy/tests/encoding.test.ts", "apps/reverse-proxy/tests/proxy.middleware.test.ts"],
+      "includes": ["apps/reverse-proxy/tests/encoding.test.ts", "apps/reverse-proxy/tests/proxy.middleware.test.ts", "apps/reverse-proxy/tests/playwright.test.ts"],
       "linter": {
         "rules": {
           "nursery": {
             "noSecrets": "off",
             "noUnresolvedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/reverse-proxy/src/ip-rotate-signer.ts"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noUnresolvedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/reverse-proxy/tests/ip-rotate-*.test.ts"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noSecrets": "off",
+            "noUnresolvedImports": "off"
+          },
+          "complexity": {
+            "noExcessiveLinesPerFunction": {
+              "level": "error",
+              "options": {
+                "maxLines": 250,
+                "skipBlankLines": false,
+                "skipIifes": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/ip-rotate/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noNodejsModules": "off",
+            "noProcessGlobal": "off",
+            "noUndeclaredVariables": "off"
+          },
+          "nursery": {
+            "noUnresolvedImports": "off",
+            "noSecrets": "off"
+          },
+          "complexity": {
+            "noExcessiveLinesPerFunction": {
+              "level": "error",
+              "options": {
+                "maxLines": 250,
+                "skipBlankLines": false,
+                "skipIifes": false
+              }
+            }
           }
         }
       }
