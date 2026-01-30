@@ -6,10 +6,10 @@ import {
   HTTP_STATUS_BAD_REQUEST,
   HTTP_STATUS_INTERNAL_SERVER_ERROR,
   HTTP_STATUS_NOT_FOUND,
-} from '../constants.ts';
-import type { WorkerBindings } from '../global.d.ts';
+} from '../constants/index.ts';
 import { findSignInUserByDomainAndUserId } from '../repositories/sign-in-users.ts';
 import { executeSignInFlow } from '../services/signin.ts';
+import type { WorkerBindings } from '../types/index.ts';
 import { extractDomain } from '../utils/domain.ts';
 import { errorResponse, jsonResponse } from '../utils/response.ts';
 

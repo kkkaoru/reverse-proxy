@@ -3,8 +3,8 @@
 
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { HTTP_STATUS_OK } from '../constants.ts';
-import type { ErrorResponse, SuccessResponse } from '../types.ts';
+import { HTTP_STATUS_OK } from '../constants/index.ts';
+import type { ErrorResponse, SuccessResponse } from '../types/index.ts';
 
 export interface ErrorResponseParams {
   c: Context;

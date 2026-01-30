@@ -2,7 +2,10 @@
 // Execute with bun: wrangler dev
 
 import type { BrowserContext, Page } from '@cloudflare/playwright';
-import { BROWSER_DEFAULT_TIMEOUT_MS, BROWSER_WAIT_UNTIL_DOMCONTENTLOADED } from '../constants.ts';
+import {
+  BROWSER_DEFAULT_TIMEOUT_MS,
+  BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
+} from '../constants/index.ts';
 
 interface ValidationParams {
   page: Page;

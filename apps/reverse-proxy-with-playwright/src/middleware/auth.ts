@@ -2,10 +2,10 @@
 // Execute with bun: wrangler dev
 
 import type { Context, Next } from 'hono';
-import { HTTP_STATUS_BAD_REQUEST, HTTP_STATUS_UNAUTHORIZED } from '../constants.ts';
+import { HTTP_STATUS_BAD_REQUEST, HTTP_STATUS_UNAUTHORIZED } from '../constants/index.ts';
 import { verifyEd25519Signature } from '../crypto/ed25519.ts';
-import type { WorkerBindings } from '../global.d.ts';
 import { findSecretKeyByDomain } from '../repositories/secret-keys.ts';
+import type { WorkerBindings } from '../types/index.ts';
 import { extractDomain } from '../utils/domain.ts';
 import { errorResponse } from '../utils/response.ts';
 

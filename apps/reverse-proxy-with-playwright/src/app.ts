@@ -8,12 +8,12 @@ import {
   PLAYWRIGHT_HEALTHCHECK_PATH,
   PLAYWRIGHT_PATH,
   PLAYWRIGHT_SIGNIN_PATH,
-} from './constants.ts';
-import type { WorkerBindings } from './global.d.ts';
+} from './constants/index.ts';
 import { authMiddleware } from './middleware/auth.ts';
 import { handleHealthcheck } from './routes/healthcheck.ts';
 import { playwrightHandler } from './routes/playwright.ts';
 import { playwrightSignInHandler } from './routes/playwright-signin.ts';
+import type { WorkerBindings } from './types/index.ts';
 
 export const app: Hono<{ Bindings: WorkerBindings }> = new Hono();
 

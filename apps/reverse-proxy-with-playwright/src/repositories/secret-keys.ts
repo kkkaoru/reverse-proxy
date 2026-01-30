@@ -6,7 +6,7 @@ import { desc, eq } from 'drizzle-orm';
 import { generateUuid7 } from '../crypto/uuid7.ts';
 import { createDrizzleClient } from '../db/client.ts';
 import { secretKeys } from '../db/schema.ts';
-import type { SecretKey } from '../types.ts';
+import type { SecretKey } from '../types/index.ts';
 
 interface CreateSecretKeyParams {
   domain: string;

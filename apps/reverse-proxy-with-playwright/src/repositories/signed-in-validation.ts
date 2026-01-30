@@ -6,7 +6,7 @@ import { desc, eq } from 'drizzle-orm';
 import { generateUuid7 } from '../crypto/uuid7.ts';
 import { createDrizzleClient } from '../db/client.ts';
 import { signedInValidationRegex } from '../db/schema.ts';
-import type { SignedInValidationRegex } from '../types.ts';
+import type { SignedInValidationRegex } from '../types/index.ts';
 
 interface CreateSignedInValidationParams {
   domain: string;

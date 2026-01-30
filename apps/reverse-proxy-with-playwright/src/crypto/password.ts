@@ -8,7 +8,7 @@ import {
   PBKDF2_HASH_ALGORITHM,
   PBKDF2_ITERATIONS,
   PBKDF2_KEY_LENGTH,
-} from '../constants.ts';
+} from '../constants/index.ts';
 
 export interface HashPasswordParams {
   password: string;

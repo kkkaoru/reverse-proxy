@@ -39,20 +39,20 @@ const normalizeEncodingName = (encoding: string): string => {
   const normalized = encoding.toLowerCase().replace(/[^a-z0-9]/g, '');
 
   const encodingMap: Record<string, string> = {
-    'shiftjis': 'shift_jis',
-    'sjis': 'shift_jis',
-    'xsjis': 'shift_jis',
-    'eucjp': 'euc-jp',
-    'xeucjp': 'euc-jp',
-    'iso2022jp': 'iso-2022-jp',
-    'utf8': 'utf-8',
-    'utf16': 'utf-16',
-    'utf16le': 'utf-16le',
-    'utf16be': 'utf-16be',
-    'ascii': 'ascii',
-    'usascii': 'ascii',
-    'latin1': 'iso-8859-1',
-    'iso88591': 'iso-8859-1',
+    shiftjis: 'shift_jis',
+    sjis: 'shift_jis',
+    xsjis: 'shift_jis',
+    eucjp: 'euc-jp',
+    xeucjp: 'euc-jp',
+    iso2022jp: 'iso-2022-jp',
+    utf8: 'utf-8',
+    utf16: 'utf-16',
+    utf16le: 'utf-16le',
+    utf16be: 'utf-16be',
+    ascii: 'ascii',
+    usascii: 'ascii',
+    latin1: 'iso-8859-1',
+    iso88591: 'iso-8859-1',
   };
 
   return encodingMap[normalized] ?? encoding;

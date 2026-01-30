@@ -6,7 +6,7 @@ import {
   DATE_MONTH_OFFSET,
   DATE_PAD_CHAR,
   DATE_PAD_LENGTH,
-} from '../constants.ts';
+} from '../constants/index.ts';
 
 interface CacheKeyParams {
   url: string;

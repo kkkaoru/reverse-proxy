@@ -2,9 +2,8 @@
 // Execute with bun: wrangler dev
 
 import type { Context } from 'hono';
-import { HTTP_STATUS_OK, LOG_PREFIX, SERVICE_NAME_MAIN } from '../constants.ts';
-import type { WorkerBindings } from '../global.d.ts';
-import type { HealthcheckResponse } from '../types.ts';
+import { HTTP_STATUS_OK, LOG_PREFIX, SERVICE_NAME_MAIN } from '../constants/index.ts';
+import type { HealthcheckResponse, WorkerBindings } from '../types/index.ts';
 import { jsonResponse } from '../utils/response.ts';
 
 export const handleHealthcheck = (c: Context<{ Bindings: WorkerBindings }>): Response => {

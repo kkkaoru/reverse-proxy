@@ -1,7 +1,7 @@
 // UUID7 generation utility
 // Execute with bun: wrangler dev
 
-import { HEX_BASE } from '../constants.ts';
+import { HEX_BASE } from '../constants/index.ts';
 
 const UUID7_VERSION: number = 0x7000;
 const UUID7_VARIANT: number = 0x8000;

@@ -10,7 +10,7 @@ import {
   BASE64_SHIFT_4,
   BASE64_SHIFT_6,
   BASE64_TRIPLET_SIZE,
-} from '../constants.ts';
+} from '../constants/index.ts';
 
 const OPENSSH_ED25519_HEADER = 'openssh-key-v1';
 const PRIVATE_KEY_LENGTH = 64;

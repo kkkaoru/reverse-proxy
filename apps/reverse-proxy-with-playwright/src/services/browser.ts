@@ -6,7 +6,7 @@ import {
   BROWSER_DEFAULT_TIMEOUT_MS,
   BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
   BROWSER_WAIT_UNTIL_NETWORKIDLE,
-} from '../constants.ts';
+} from '../constants/index.ts';
 import { convertToUtf8 } from '../utils/encoding.ts';
 import { launchBrowser } from './browser-launcher.ts';
 
@@ -141,7 +141,9 @@ export const performSignIn = async (params: SignInParams): Promise<SignInResult>
     await page.fill(params.passwordSelector, params.password);
     await page.click(params.signInButtonSelector);
 
-    await page.waitForLoadState(BROWSER_WAIT_UNTIL_NETWORKIDLE, { timeout: BROWSER_DEFAULT_TIMEOUT_MS });
+    await page.waitForLoadState(BROWSER_WAIT_UNTIL_NETWORKIDLE, {
+      timeout: BROWSER_DEFAULT_TIMEOUT_MS,
+    });
 
     const rawState = await context.storageState();
     const storageState: StorageState = convertToStorageState(rawState);

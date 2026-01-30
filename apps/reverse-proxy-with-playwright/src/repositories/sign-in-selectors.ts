@@ -6,7 +6,7 @@ import { desc, eq } from 'drizzle-orm';
 import { generateUuid7 } from '../crypto/uuid7.ts';
 import { createDrizzleClient } from '../db/client.ts';
 import { signInSelectors } from '../db/schema.ts';
-import type { SignInSelector } from '../types.ts';
+import type { SignInSelector } from '../types/index.ts';
 
 interface CreateSignInSelectorParams {
   domain: string;
