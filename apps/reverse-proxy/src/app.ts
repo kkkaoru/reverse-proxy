@@ -2,9 +2,10 @@
 // Execute with bun: wrangler dev
 
 import { Hono } from 'hono';
-import { HEALTHCHECK_PATH, handleHealthcheck } from './healthcheck.ts';
-import { createProxyCacheMiddleware, type ProxyCacheStaticOptions } from './middleware.ts';
-import type { PlaywrightEnv } from './playwright.ts';
+import type { PlaywrightEnv } from './playwright/handler.ts';
+import { createProxyCacheMiddleware } from './proxy/middleware.ts';
+import type { ProxyCacheStaticOptions } from './proxy/types.ts';
+import { HEALTHCHECK_PATH, handleHealthcheck } from './routes/healthcheck.ts';
 
 // Interfaces
 export interface ReverseProxyBindings {
@@ -28,9 +29,14 @@ export const DEFAULT_PROXY_OPTIONS: ProxyCacheStaticOptions = {
 // Functions
 const registerPlaywrightRoute = (instance: HonoApp): void => {
   instance.get(PLAYWRIGHT_PATH, async (c) => {
-    const { handlePlaywrightRequest } = await import('./playwright.ts');
+    const { handlePlaywrightRequest } = await import('./playwright/handler.ts');
     const env = c.env as unknown as PlaywrightEnv;
     return handlePlaywrightRequest(c.req.raw, env);
+  });
+  instance.delete(PLAYWRIGHT_PATH, async (c) => {
+    const { handlePlaywrightDeleteRequest } = await import('./playwright/handler.ts');
+    const env = c.env as unknown as PlaywrightEnv;
+    return handlePlaywrightDeleteRequest(c.req.raw, env);
   });
 };
 
