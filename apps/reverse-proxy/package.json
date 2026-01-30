@@ -10,12 +10,14 @@
     "typecheck": "bunx tsgo --project tsconfig.json",
     "lint": "bunx biome check src tests vitest.config.ts",
     "lint:fix": "bunx biome check --write src tests vitest.config.ts",
-    "deploy": "bunx wrangler deploy"
+    "deploy": "./scripts/deploy.sh"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "4.20251008.0"
   },
   "dependencies": {
+    "@aws-crypto/sha256-js": "5.2.0",
+    "@smithy/signature-v4": "5.0.2",
     "iconv-lite": "0.7.2"
   }
 }
