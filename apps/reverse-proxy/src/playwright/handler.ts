@@ -5,7 +5,8 @@
 
 import type { Browser, BrowserContext, BrowserWorker, Page } from '@cloudflare/playwright';
 import { launch as playwrightLaunch } from '@cloudflare/playwright';
-import type { FetchPageResponse, PlaywrightCoreEnv } from './core.ts';
+import type { IpRotateConfig } from '../ip-rotate/types.ts';
+import type { FetchPageResponse, IpRotateOptions, PlaywrightCoreEnv } from './core.ts';
 import {
   CONTENT_TYPE_HTML,
   createCacheKey,
@@ -16,6 +17,7 @@ import {
   handleCoreRequest,
   handleDeleteRequest,
   isHtmlContentType,
+  parseIpRotateConfigFromEnv,
   parseRequest,
   validateRequest,
 } from './core.ts';
@@ -38,6 +40,9 @@ interface FetchPageWithRetryParams {
 
 // Types
 type WaitUntilState = 'domcontentloaded' | 'load' | 'networkidle';
+
+// Module-level counter for IP rotation round-robin
+const ipRotateCounters: Map<string, number> = new Map();
 
 // Constants
 const BROWSER_DEFAULT_TIMEOUT_MS: number = 30000;
@@ -125,6 +130,10 @@ export const handlePlaywrightRequest = (
   }
 
   const cacheKey: string = createCacheKey(targetUrl as string, env.CACHE_VERSION);
+  const ipRotateConfig: IpRotateConfig | undefined = parseIpRotateConfigFromEnv(env);
+  const ipRotateOptions: IpRotateOptions | undefined = ipRotateConfig
+    ? { config: ipRotateConfig, counters: ipRotateCounters }
+    : undefined;
 
   return handleCoreRequest({
     env,
@@ -133,6 +142,7 @@ export const handlePlaywrightRequest = (
     disableKv,
     disableCache,
     fetchPage: () => fetchPageWithBrowser(env.BROWSER, targetUrl as string),
+    ipRotateOptions,
   });
 };
 

@@ -2,11 +2,25 @@
 // This module contains all caching, validation, and response handling logic
 // that can be tested without the @cloudflare/playwright dependency
 
+import {
+  isIpRotateTarget,
+  parseIpRotateConfig,
+  rewriteUrlForIpRotate,
+} from '../ip-rotate/client.ts';
+import { fetchWithAuth } from '../ip-rotate/fetch.ts';
+import type { IpRotateConfig, ParsedConfig, RewriteUrlResult } from '../ip-rotate/types.ts';
+
 // Interfaces
 export interface PlaywrightCoreEnv {
   KV?: KVNamespace;
   LOG_REQUESTS?: string;
   CACHE_VERSION: string;
+  IP_ROTATE_ENDPOINTS?: string;
+  IP_ROTATE_AUTH_TYPE?: string;
+  IP_ROTATE_API_KEY?: string;
+  IP_ROTATE_AWS_ACCESS_KEY_ID?: string;
+  IP_ROTATE_AWS_SECRET_ACCESS_KEY?: string;
+  IP_ROTATE_AWS_REGION?: string;
 }
 
 export interface FetchPageResult {
@@ -84,6 +98,18 @@ export interface HandleRequestParams {
   disableKv: boolean;
   disableCache: boolean;
   fetchPage: () => Promise<FetchPageResponse>;
+  ipRotateOptions?: IpRotateOptions;
+}
+
+export interface IpRotateFetchParams {
+  readonly url: URL;
+  readonly config: IpRotateConfig;
+  readonly counters: Map<string, number>;
+}
+
+export interface IpRotateOptions {
+  readonly config: IpRotateConfig | undefined;
+  readonly counters: Map<string, number>;
 }
 
 // Types
@@ -119,6 +145,90 @@ export const ERROR_INVALID_URL: string = 'Query parameter "url" must be a valid 
 export const ERROR_UNKNOWN_FETCH: string = 'Unknown error during page fetch';
 export const LOG_REQUESTS_ENABLED: string = 'TRUE';
 export const PLAYWRIGHT_PATH: string = '/playwright';
+export const METHOD_GET: string = 'GET';
+export const LOG_EVENT_IP_ROTATE: string = 'ip-rotate-fetch';
+
+// IP Rotate functions
+export const parseIpRotateConfigFromEnv = (env: PlaywrightCoreEnv): IpRotateConfig | undefined => {
+  const parsed: ParsedConfig = parseIpRotateConfig({
+    endpointsJson: env.IP_ROTATE_ENDPOINTS,
+    authType: env.IP_ROTATE_AUTH_TYPE,
+    apiKey: env.IP_ROTATE_API_KEY,
+    accessKeyId: env.IP_ROTATE_AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.IP_ROTATE_AWS_SECRET_ACCESS_KEY,
+    region: env.IP_ROTATE_AWS_REGION,
+  });
+
+  return parsed.success ? parsed.config : undefined;
+};
+
+export const shouldUseIpRotateForPlaywright = (
+  config: IpRotateConfig | undefined,
+  url: URL,
+): boolean => {
+  if (!config) {
+    return false;
+  }
+  return isIpRotateTarget(config, url.host);
+};
+
+export const fetchViaIpRotateForPlaywright = (
+  params: IpRotateFetchParams,
+): Promise<Response> | null => {
+  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
+    params.config,
+    params.url,
+    params.counters,
+  );
+
+  if (!rewriteResult.success) {
+    return null;
+  }
+
+  return fetchWithAuth({
+    url: rewriteResult.url,
+    auth: params.config.auth,
+    headers: {},
+    method: METHOD_GET,
+  });
+};
+
+export const tryFetchWithIpRotate = async (
+  env: PlaywrightCoreEnv,
+  targetUrl: string,
+  options: IpRotateOptions,
+): Promise<FetchPageResponse | null> => {
+  const url: URL = new URL(targetUrl);
+
+  if (!shouldUseIpRotateForPlaywright(options.config, url)) {
+    return null;
+  }
+
+  if (!options.config) {
+    return null;
+  }
+
+  const response: Response | null = await fetchViaIpRotateForPlaywright({
+    url,
+    config: options.config,
+    counters: options.counters,
+  });
+
+  if (!response) {
+    return null;
+  }
+
+  logEvent(env, LOG_EVENT_IP_ROTATE, { target: targetUrl });
+
+  const content: string = await response.text();
+  const contentType: string = response.headers.get(HEADER_CONTENT_TYPE) ?? CONTENT_TYPE_HTML;
+
+  return {
+    content,
+    contentType,
+    status: response.status,
+  };
+};
 
 // Functions
 export const isLoggingEnabled = (env: PlaywrightCoreEnv): boolean =>
@@ -277,7 +387,7 @@ export const validateRequest = (
 };
 
 export const handleCoreRequest = async (params: HandleRequestParams): Promise<Response> => {
-  const { env, targetUrl, cacheKey, disableKv, disableCache, fetchPage } = params;
+  const { env, targetUrl, cacheKey, disableKv, disableCache, fetchPage, ipRotateOptions } = params;
 
   const cachedResponse: Response | null = await tryGetCached({
     env,
@@ -292,6 +402,29 @@ export const handleCoreRequest = async (params: HandleRequestParams): Promise<Re
   }
 
   logEvent(env, 'fetch-start', { target: targetUrl });
+
+  // Try IP rotate fetch first if configured
+  if (ipRotateOptions) {
+    const ipRotateResult: FetchPageResponse | null = await tryFetchWithIpRotate(
+      env,
+      targetUrl,
+      ipRotateOptions,
+    );
+
+    if (ipRotateResult && isFetchSuccess(ipRotateResult)) {
+      return handleFetchSuccess({
+        env,
+        targetUrl,
+        cacheKey,
+        content: ipRotateResult.content,
+        contentType: ipRotateResult.contentType,
+        status: ipRotateResult.status,
+        disableKv,
+      });
+    }
+  }
+
+  // Fall back to browser fetch
   const result: FetchPageResponse = await fetchPage();
 
   if (!isFetchSuccess(result)) {
