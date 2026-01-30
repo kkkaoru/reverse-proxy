@@ -12,7 +12,6 @@ import type {
 } from './types.ts';
 
 // Constants at top
-const COUNTER_INITIAL_VALUE = 0;
 const AUTH_TYPE_API_KEY = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
 const ERROR_MISSING_ENDPOINTS = 'IP_ROTATE_ENDPOINTS is required';
@@ -27,6 +26,27 @@ const getEndpointList = (config: IpRotateConfig, domain: string): readonly strin
 const isIpRotateTarget = (config: IpRotateConfig, domain: string): boolean =>
   getEndpointList(config, domain) !== undefined;
 
+const getEndpointCount = (config: IpRotateConfig, domain: string): number => {
+  const endpoints: readonly string[] | undefined = getEndpointList(config, domain);
+  return endpoints?.length ?? 0;
+};
+
+const getRandomInitialIndex = (length: number): number => Math.floor(Math.random() * length);
+
+const getOrInitializeCounter = (
+  counters: Map<string, number>,
+  domain: string,
+  endpointCount: number,
+): number => {
+  const existing: number | undefined = counters.get(domain);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const initialIndex: number = getRandomInitialIndex(endpointCount);
+  counters.set(domain, initialIndex);
+  return initialIndex;
+};
+
 const getNextEndpoint = (params: GetEndpointParams): string | null => {
   const endpoints: readonly string[] | undefined = getEndpointList(params.config, params.domain);
   if (!endpoints) {
@@ -36,7 +56,7 @@ const getNextEndpoint = (params: GetEndpointParams): string | null => {
     return null;
   }
 
-  const current: number = params.counters.get(params.domain) ?? COUNTER_INITIAL_VALUE;
+  const current: number = getOrInitializeCounter(params.counters, params.domain, endpoints.length);
   const endpoint: string | undefined = endpoints[current % endpoints.length];
   if (!endpoint) {
     return null;
@@ -135,6 +155,7 @@ const parseIpRotateConfig = (params: ParseConfigParams): ParsedConfig => {
 export {
   AUTH_TYPE_API_KEY,
   AUTH_TYPE_IAM,
+  getEndpointCount,
   getNextEndpoint,
   isIpRotateTarget,
   parseIpRotateConfig,
