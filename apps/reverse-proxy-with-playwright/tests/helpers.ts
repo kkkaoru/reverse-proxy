@@ -3,7 +3,7 @@
 
 import type { Context } from 'hono';
 import { vi } from 'vitest';
-import type { WorkerBindings } from '../src/global.d.ts';
+import type { WorkerBindings } from '../src/types/index.ts';
 
 // SQL parsing regex patterns - support both quoted and unquoted column/table names
 // Also support table-prefixed column names like "table"."column"

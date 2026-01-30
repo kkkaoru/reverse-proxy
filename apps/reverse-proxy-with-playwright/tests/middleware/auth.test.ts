@@ -4,13 +4,13 @@
 import type { Context, Next } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 import { signEd25519Message } from '../../src/crypto/ed25519.ts';
-import type { WorkerBindings } from '../../src/global.d.ts';
 import {
   authMiddleware,
   buildSignatureMessageForTest,
   extractBearerTokenForTest,
   verifyBearerToken,
 } from '../../src/middleware/auth.ts';
+import type { WorkerBindings } from '../../src/types/index.ts';
 import { createInMemoryD1Database, type InMemoryD1Row } from '../helpers.ts';
 
 // Test key from README - OpenSSH ED25519 private key base64

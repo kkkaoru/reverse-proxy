@@ -10,12 +10,12 @@ vi.mock('../../src/services/browser-launcher.ts', () => ({
   launchBrowser: vi.fn(),
 }));
 
-import type { WorkerBindings } from '../../src/global.d.ts';
 import {
   getQueryParamsForTest,
   playwrightSignInHandler,
 } from '../../src/routes/playwright-signin.ts';
 import { launchBrowser } from '../../src/services/browser-launcher.ts';
+import type { WorkerBindings } from '../../src/types/index.ts';
 import { createInMemoryD1Database, createMockKVNamespace, type InMemoryD1Row } from '../helpers.ts';
 
 interface MockStorageState {

@@ -2,7 +2,7 @@
 // Execute with bun: bunx vitest run
 
 import { describe, expect, it } from 'vitest';
-import { HTTP_STATUS_BAD_REQUEST, HTTP_STATUS_OK } from '../../src/constants.ts';
+import { HTTP_STATUS_BAD_REQUEST, HTTP_STATUS_OK } from '../../src/constants/index.ts';
 import {
   errorResponse,
   htmlResponse,
