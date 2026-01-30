@@ -16,5 +16,25 @@ LOG_REQUESTS="0"
 # Cache version for KV key prefix (e.g., v5).
 CACHE_VERSION="v5"
 
-# Add additional bindings below as needed, for example:
-# API_ENDPOINT="https://api.example.com"
+# ============================================================
+# IP Rotate Configuration (Optional)
+# ============================================================
+# These settings enable IP rotation via AWS API Gateway.
+# If not configured, requests will be made directly without IP rotation.
+
+# JSON object mapping target domains to API Gateway endpoints.
+# Format: {"domain":["endpoint1","endpoint2",...]}
+# Example: {"example.com":["https://api1.execute-api.us-east-1.amazonaws.com","https://api2.execute-api.us-west-2.amazonaws.com"]}
+# IP_ROTATE_ENDPOINTS=""
+
+# Authentication type for IP rotation endpoints.
+# Options: "api-key" or "aws-iam"
+# IP_ROTATE_AUTH_TYPE=""
+
+# API key for IP rotation (required when IP_ROTATE_AUTH_TYPE="api-key").
+# IP_ROTATE_API_KEY=""
+
+# AWS credentials for IP rotation (required when IP_ROTATE_AUTH_TYPE="aws-iam").
+# IP_ROTATE_AWS_ACCESS_KEY_ID=""
+# IP_ROTATE_AWS_SECRET_ACCESS_KEY=""
+# IP_ROTATE_AWS_REGION=""
