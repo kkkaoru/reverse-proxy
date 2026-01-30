@@ -37,6 +37,7 @@ import {
   logEvent,
   PLAYWRIGHT_PATH,
   parseCachedContent,
+  parseIpRotateConfigFromEnv,
   parseRequest,
   STATUS_BAD_GATEWAY,
   STATUS_BAD_REQUEST,
@@ -45,6 +46,8 @@ import {
   setCachedContent,
   shouldCache,
   shouldLogCacheSkip,
+  shouldUseIpRotateForPlaywright,
+  tryFetchWithIpRotate,
   tryGetCached,
   validateRequest,
 } from '../src/playwright/core.ts';
@@ -659,4 +662,195 @@ describe('handleDeleteRequest', () => {
 
     expect(mockKV.get).toHaveBeenCalledWith('playwright-v10::https://example.com/page', 'text');
   });
+});
+
+it('parseIpRotateConfigFromEnv returns undefined when no endpoints', () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+  };
+  const result = parseIpRotateConfigFromEnv(env);
+  expect(result).toBeUndefined();
+});
+
+it('parseIpRotateConfigFromEnv returns config with valid endpoints', () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com","https://api2.example.com"]}',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const result = parseIpRotateConfigFromEnv(env);
+  expect(result).toBeDefined();
+  expect(result?.auth.type).toBe('api-key');
+});
+
+it('shouldUseIpRotateForPlaywright returns false when config is undefined', () => {
+  const result = shouldUseIpRotateForPlaywright(undefined, new URL('https://example.com'));
+  expect(result).toBe(false);
+});
+
+it('shouldUseIpRotateForPlaywright returns true when domain matches', () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = parseIpRotateConfigFromEnv(env);
+  const result = shouldUseIpRotateForPlaywright(config, new URL('https://example.com/path'));
+  expect(result).toBe(true);
+});
+
+it('shouldUseIpRotateForPlaywright returns false when domain does not match', () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = parseIpRotateConfigFromEnv(env);
+  const result = shouldUseIpRotateForPlaywright(config, new URL('https://other.com/path'));
+  expect(result).toBe(false);
+});
+
+it('tryFetchWithIpRotate returns null when config is undefined', async () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+  };
+  const result = await tryFetchWithIpRotate(env, 'https://example.com', {
+    config: undefined,
+    counters: new Map(),
+  });
+  expect(result).toBeNull();
+});
+
+it('tryFetchWithIpRotate returns null when domain does not match', async () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = parseIpRotateConfigFromEnv(env);
+  const result = await tryFetchWithIpRotate(env, 'https://other.com', {
+    config,
+    counters: new Map(),
+  });
+  expect(result).toBeNull();
+});
+
+it('handleCoreRequest uses ip rotate when configured and domain matches', async () => {
+  const mockKV = createMockKV();
+  mockKV.get.mockResolvedValue(null);
+  mockKV.put.mockResolvedValue(undefined);
+
+  const env: PlaywrightCoreEnv = {
+    KV: mockKV as unknown as KVNamespace,
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+
+  const fetchPage = vi.fn().mockResolvedValue({
+    content: '<html>browser</html>',
+    contentType: CONTENT_TYPE_HTML,
+    status: 200,
+  });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    new Response('<html>ip-rotate</html>', {
+      status: 200,
+      headers: { 'content-type': CONTENT_TYPE_HTML },
+    }),
+  );
+
+  const ipRotateConfig = parseIpRotateConfigFromEnv(env);
+
+  const response = await handleCoreRequest({
+    env,
+    targetUrl: 'https://example.com/page',
+    cacheKey: 'test-key',
+    disableKv: false,
+    disableCache: false,
+    fetchPage,
+    ipRotateOptions: {
+      config: ipRotateConfig,
+      counters: new Map(),
+    },
+  });
+
+  expect(response.status).toBe(STATUS_OK);
+  expect(await response.text()).toBe('<html>ip-rotate</html>');
+  expect(fetchPage).not.toHaveBeenCalled();
+
+  globalThis.fetch = originalFetch;
+});
+
+it('handleCoreRequest falls back to browser when ip rotate is not configured', async () => {
+  const mockKV = createMockKV();
+  mockKV.get.mockResolvedValue(null);
+  mockKV.put.mockResolvedValue(undefined);
+
+  const env = createMockEnv(mockKV);
+
+  const fetchPage = vi.fn().mockResolvedValue({
+    content: '<html>browser</html>',
+    contentType: CONTENT_TYPE_HTML,
+    status: 200,
+  });
+
+  const response = await handleCoreRequest({
+    env,
+    targetUrl: 'https://example.com/page',
+    cacheKey: 'test-key',
+    disableKv: false,
+    disableCache: false,
+    fetchPage,
+    ipRotateOptions: undefined,
+  });
+
+  expect(response.status).toBe(STATUS_OK);
+  expect(await response.text()).toBe('<html>browser</html>');
+  expect(fetchPage).toHaveBeenCalled();
+});
+
+it('handleCoreRequest falls back to browser when domain does not match ip rotate config', async () => {
+  const mockKV = createMockKV();
+  mockKV.get.mockResolvedValue(null);
+  mockKV.put.mockResolvedValue(undefined);
+
+  const env: PlaywrightCoreEnv = {
+    KV: mockKV as unknown as KVNamespace,
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: '{"example.com":["https://api1.example.com"]}',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+
+  const fetchPage = vi.fn().mockResolvedValue({
+    content: '<html>browser</html>',
+    contentType: CONTENT_TYPE_HTML,
+    status: 200,
+  });
+
+  const ipRotateConfig = parseIpRotateConfigFromEnv(env);
+
+  const response = await handleCoreRequest({
+    env,
+    targetUrl: 'https://other.com/page',
+    cacheKey: 'test-key',
+    disableKv: false,
+    disableCache: false,
+    fetchPage,
+    ipRotateOptions: {
+      config: ipRotateConfig,
+      counters: new Map(),
+    },
+  });
+
+  expect(response.status).toBe(STATUS_OK);
+  expect(await response.text()).toBe('<html>browser</html>');
+  expect(fetchPage).toHaveBeenCalled();
 });
