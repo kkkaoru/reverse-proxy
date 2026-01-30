@@ -1,9 +1,9 @@
 // Proxy fetch operations
 // Execute with bun: wrangler dev
 
-import { isIpRotateTarget, rewriteUrlForIpRotate } from '../ip-rotate/client.ts';
-import { fetchWithAuth } from '../ip-rotate/fetch.ts';
-import type { RewriteUrlResult } from '../ip-rotate/types.ts';
+import { isIpRotateTarget } from '../ip-rotate/client.ts';
+import { fetchWithRetry } from '../ip-rotate/fetch.ts';
+import type { FetchRetryResult } from '../ip-rotate/types.ts';
 import { cacheResponse, logEvent, storeInKvCache } from './cache.ts';
 import {
   CACHE_MODE_NO_STORE,
@@ -121,24 +121,19 @@ export const processFetchResponse = async (
   return response;
 };
 
-// Fetch via IP rotation
-export const fetchViaIpRotate = (ipRotateParams: IpRotateFetchParams): Promise<Response> | null => {
-  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
-    ipRotateParams.config,
-    ipRotateParams.url,
-    ipRotateParams.counters,
-  );
-
-  if (!rewriteResult.success) {
-    return null;
-  }
-
-  return fetchWithAuth({
-    url: rewriteResult.url,
-    auth: ipRotateParams.config.auth,
+// Fetch via IP rotation with retry
+export const fetchViaIpRotate = async (
+  ipRotateParams: IpRotateFetchParams,
+): Promise<Response | null> => {
+  const result: FetchRetryResult = await fetchWithRetry({
+    config: ipRotateParams.config,
+    targetUrl: ipRotateParams.url,
+    counters: ipRotateParams.counters,
     headers: ipRotateParams.headers,
     method: METHOD_GET,
   });
+
+  return result.success ? result.response : result.lastResponse;
 };
 
 // Check if should use IP rotation
