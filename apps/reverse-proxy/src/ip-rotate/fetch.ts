@@ -145,9 +145,10 @@ const isErrorStatus = (status: number): boolean => status >= STATUS_ERROR_THRESH
 
 const calculateMaxRetries = (endpointCount: number): number => endpointCount * RETRY_MULTIPLIER;
 
-const createSuccessResult = (response: Response): FetchRetryResult => ({
+const createSuccessResult = (response: Response, usedEndpoint: string): FetchRetryResult => ({
   success: true,
   response,
+  usedEndpoint,
 });
 
 const createFailureResult = (lastResponse: Response | null, error: string): FetchRetryResult => ({
@@ -174,6 +175,7 @@ interface TryFetchResult {
   readonly response: Response | null;
   readonly rewriteSuccess: boolean;
   readonly timedOut: boolean;
+  readonly usedEndpoint: string | null;
 }
 
 interface RetryAttemptParams {
@@ -181,6 +183,7 @@ interface RetryAttemptParams {
   readonly attempt: number;
   readonly maxRetries: number;
   readonly lastResponse: Response | null;
+  readonly lastUsedEndpoint: string | null;
   readonly currentTimeoutMs: number;
   readonly timeoutConfig: TimeoutConfig;
 }
@@ -196,8 +199,10 @@ const tryFetchEndpoint = async (fetchParams: TryFetchEndpointParams): Promise<Tr
   );
 
   if (!rewriteResult.success) {
-    return { response: null, rewriteSuccess: false, timedOut: false };
+    return { response: null, rewriteSuccess: false, timedOut: false, usedEndpoint: null };
   }
+
+  const usedEndpoint: string = rewriteResult.url.origin;
 
   // Use the endpoint-specific API key from the rewrite result
   const auth: IpRotateAuth = createAuthFromEndpoint(
@@ -215,10 +220,10 @@ const tryFetchEndpoint = async (fetchParams: TryFetchEndpointParams): Promise<Tr
       body: fetchParams.params.body,
       signal,
     });
-    return { response, rewriteSuccess: true, timedOut: false };
+    return { response, rewriteSuccess: true, timedOut: false, usedEndpoint };
   } catch (error: unknown) {
     if (isTimeoutError(error)) {
-      return { response: null, rewriteSuccess: true, timedOut: true };
+      return { response: null, rewriteSuccess: true, timedOut: true, usedEndpoint };
     }
     throw error;
   }
@@ -249,6 +254,7 @@ const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetry
       attempt: retryParams.attempt + 1,
       maxRetries: retryParams.maxRetries,
       lastResponse: retryParams.lastResponse,
+      lastUsedEndpoint: result.usedEndpoint,
       currentTimeoutMs: newTimeout,
       timeoutConfig: retryParams.timeoutConfig,
     });
@@ -256,7 +262,7 @@ const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetry
 
   // Handle success - decrease timeout for next request
   if (result.response && !isErrorStatus(result.response.status)) {
-    return createSuccessResult(result.response);
+    return createSuccessResult(result.response, result.usedEndpoint ?? '');
   }
 
   // Handle error status - increase timeout and retry
@@ -269,6 +275,7 @@ const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetry
     attempt: retryParams.attempt + 1,
     maxRetries: retryParams.maxRetries,
     lastResponse: result.response,
+    lastUsedEndpoint: result.usedEndpoint,
     currentTimeoutMs: newTimeout,
     timeoutConfig: retryParams.timeoutConfig,
   });
@@ -291,6 +298,7 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
     attempt: 0,
     maxRetries,
     lastResponse: null,
+    lastUsedEndpoint: null,
     currentTimeoutMs: clampTimeout(initialTimeout, timeoutConfig),
     timeoutConfig,
   });
