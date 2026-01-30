@@ -242,6 +242,27 @@
       }
     },
     {
+      "includes": ["apps/reverse-proxy/src/ip-rotate/*.test.ts"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noSecrets": "off",
+            "noUnresolvedImports": "off"
+          },
+          "complexity": {
+            "noExcessiveLinesPerFunction": {
+              "level": "error",
+              "options": {
+                "maxLines": 250,
+                "skipBlankLines": false,
+                "skipIifes": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["apps/ip-rotate/**"],
       "linter": {
         "rules": {
