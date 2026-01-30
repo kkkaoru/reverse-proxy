@@ -2,13 +2,9 @@
 // This module contains all caching, validation, and response handling logic
 // that can be tested without the @cloudflare/playwright dependency
 
-import {
-  isIpRotateTarget,
-  parseIpRotateConfig,
-  rewriteUrlForIpRotate,
-} from '../ip-rotate/client.ts';
-import { fetchWithAuth } from '../ip-rotate/fetch.ts';
-import type { IpRotateConfig, ParsedConfig, RewriteUrlResult } from '../ip-rotate/types.ts';
+import { isIpRotateTarget, parseIpRotateConfig } from '../ip-rotate/client.ts';
+import { fetchWithRetry } from '../ip-rotate/fetch.ts';
+import type { FetchRetryResult, IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
 
 // Interfaces
 export interface PlaywrightCoreEnv {
@@ -172,25 +168,18 @@ export const shouldUseIpRotateForPlaywright = (
   return isIpRotateTarget(config, url.host);
 };
 
-export const fetchViaIpRotateForPlaywright = (
+export const fetchViaIpRotateForPlaywright = async (
   params: IpRotateFetchParams,
-): Promise<Response> | null => {
-  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
-    params.config,
-    params.url,
-    params.counters,
-  );
-
-  if (!rewriteResult.success) {
-    return null;
-  }
-
-  return fetchWithAuth({
-    url: rewriteResult.url,
-    auth: params.config.auth,
+): Promise<Response | null> => {
+  const result: FetchRetryResult = await fetchWithRetry({
+    config: params.config,
+    targetUrl: params.url,
+    counters: params.counters,
     headers: {},
     method: METHOD_GET,
   });
+
+  return result.success ? result.response : result.lastResponse;
 };
 
 export const tryFetchWithIpRotate = async (
