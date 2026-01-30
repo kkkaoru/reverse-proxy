@@ -53,12 +53,20 @@ interface GetEndpointParams {
   readonly counters: Map<string, number>;
 }
 
+interface TimeoutConfig {
+  readonly defaultMs: number;
+  readonly minMs: number;
+  readonly maxMs: number;
+  readonly adjustmentMs: number;
+}
+
 interface FetchWithAuthParams {
   readonly url: URL;
   readonly auth: IpRotateAuth;
   readonly headers: Record<string, string>;
   readonly method: string;
   readonly body?: string;
+  readonly signal?: AbortSignal;
 }
 
 interface FetchWithRetryParams {
@@ -68,6 +76,8 @@ interface FetchWithRetryParams {
   readonly headers: Record<string, string>;
   readonly method: string;
   readonly body?: string;
+  readonly timeoutMs?: number;
+  readonly envDefaultTimeoutMs?: string;
 }
 
 interface FetchWithRetryResult {
@@ -123,4 +133,5 @@ export type {
   RewriteFailure,
   RewriteResult,
   RewriteUrlResult,
+  TimeoutConfig,
 };
