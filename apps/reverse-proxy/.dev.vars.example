@@ -28,13 +28,13 @@ CACHE_VERSION="v5"
 # IP_ROTATE_ENDPOINTS=""
 
 # Authentication type for IP rotation endpoints.
-# Options: "api-key" or "aws-iam"
+# Options: "api-key" or "iam"
 # IP_ROTATE_AUTH_TYPE=""
 
 # API key for IP rotation (required when IP_ROTATE_AUTH_TYPE="api-key").
 # IP_ROTATE_API_KEY=""
 
-# AWS credentials for IP rotation (required when IP_ROTATE_AUTH_TYPE="aws-iam").
+# AWS credentials for IP rotation (required when IP_ROTATE_AUTH_TYPE="iam").
 # IP_ROTATE_AWS_ACCESS_KEY_ID=""
 # IP_ROTATE_AWS_SECRET_ACCESS_KEY=""
 # IP_ROTATE_AWS_REGION=""
