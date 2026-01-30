@@ -2,7 +2,7 @@
 // Execute with vitest: vitest run
 
 import { App } from 'aws-cdk-lib';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ParsedConfig, StackConfig, TargetDomain } from './app.ts';
 import {
   buildStackConfigsForDomain,
@@ -18,6 +18,43 @@ import {
   sanitizeHostForStackId,
   validateConfig,
 } from './app.ts';
+
+// Helper to save and restore environment variables
+interface EnvHelper {
+  readonly save: (keys: string[]) => void;
+  readonly set: (key: string, value: string) => void;
+  readonly clear: (key: string) => void;
+  readonly restore: () => void;
+}
+
+const createEnvHelper = (): EnvHelper => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  return {
+    save: (keys: string[]): void => {
+      for (const key of keys) {
+        savedEnv[key] = process.env[key];
+      }
+    },
+    set: (key: string, value: string): void => {
+      process.env[key] = value;
+    },
+    clear: (key: string): void => {
+      delete process.env[key];
+    },
+    restore: (): void => {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    },
+  };
+};
+
+const envHelper: EnvHelper = createEnvHelper();
 
 describe('parseProtocol', () => {
   test('should return http for http string', () => {
@@ -159,16 +196,26 @@ describe('buildStackId', () => {
 });
 
 describe('getEnvOrContext', () => {
+  const testEnvKeys = ['CDK_DEFAULT_ACCOUNT', 'TEST_ENV_VAR'];
+
+  beforeEach(() => {
+    envHelper.save(testEnvKeys);
+    // Clear env vars for clean test state
+    for (const key of testEnvKeys) {
+      envHelper.clear(key);
+    }
+  });
+
   afterEach(() => {
-    vi.unstubAllEnvs();
+    envHelper.restore();
   });
 
   test('should return env value when set', () => {
-    vi.stubEnv('CDK_DEFAULT_ACCOUNT', 'env-value');
+    envHelper.set('TEST_ENV_VAR', 'env-value');
     const app = new App();
     const result = getEnvOrContext({
       app,
-      envKey: 'CDK_DEFAULT_ACCOUNT',
+      envKey: 'TEST_ENV_VAR',
       contextKey: 'testContext',
     });
     expect(result).toBe('env-value');
@@ -195,11 +242,11 @@ describe('getEnvOrContext', () => {
   });
 
   test('should prefer env value over context value', () => {
-    vi.stubEnv('CDK_DEFAULT_ACCOUNT', 'env-value');
+    envHelper.set('TEST_ENV_VAR', 'env-value');
     const app = new App({ context: { testContext: 'context-value' } });
     const result = getEnvOrContext({
       app,
-      envKey: 'CDK_DEFAULT_ACCOUNT',
+      envKey: 'TEST_ENV_VAR',
       contextKey: 'testContext',
     });
     expect(result).toBe('env-value');
@@ -207,16 +254,32 @@ describe('getEnvOrContext', () => {
 });
 
 describe('parseConfig', () => {
+  const configEnvKeys = [
+    'CDK_DEFAULT_ACCOUNT',
+    'TARGET_DOMAINS',
+    'REGIONS',
+    'STAGE_NAME',
+    'AUTH_TYPE',
+  ];
+
+  beforeEach(() => {
+    envHelper.save(configEnvKeys);
+    // Clear env vars for clean test state
+    for (const key of configEnvKeys) {
+      envHelper.clear(key);
+    }
+  });
+
   afterEach(() => {
-    vi.unstubAllEnvs();
+    envHelper.restore();
   });
 
   test('should parse config with all env vars set', () => {
-    vi.stubEnv('CDK_DEFAULT_ACCOUNT', '123456789012');
-    vi.stubEnv('TARGET_DOMAINS', 'https:api.example.com');
-    vi.stubEnv('REGIONS', 'us-east-1');
-    vi.stubEnv('STAGE_NAME', 'test');
-    vi.stubEnv('AUTH_TYPE', 'iam');
+    envHelper.set('CDK_DEFAULT_ACCOUNT', '123456789012');
+    envHelper.set('TARGET_DOMAINS', 'https:api.example.com');
+    envHelper.set('REGIONS', 'us-east-1');
+    envHelper.set('STAGE_NAME', 'test');
+    envHelper.set('AUTH_TYPE', 'iam');
 
     const app = new App();
     const result = parseConfig(app);
@@ -358,6 +421,7 @@ describe('buildStackConfigsForDomain', () => {
         account: '123456789012',
         stageName: 'proxy',
         authType: 'api-key',
+        apiKeyValue: undefined,
       },
     ]);
   });
@@ -380,6 +444,7 @@ describe('buildStackConfigsForDomain', () => {
         account: '123456789012',
         stageName: 'prod',
         authType: 'iam',
+        apiKeyValue: undefined,
       },
       {
         domain: { protocol: 'https', host: 'api.example.com' },
@@ -387,6 +452,7 @@ describe('buildStackConfigsForDomain', () => {
         account: '123456789012',
         stageName: 'prod',
         authType: 'iam',
+        apiKeyValue: undefined,
       },
       {
         domain: { protocol: 'https', host: 'api.example.com' },
@@ -394,6 +460,7 @@ describe('buildStackConfigsForDomain', () => {
         account: '123456789012',
         stageName: 'prod',
         authType: 'iam',
+        apiKeyValue: undefined,
       },
     ]);
   });
@@ -410,6 +477,30 @@ describe('buildStackConfigsForDomain', () => {
     const result = buildStackConfigsForDomain(domain, config);
 
     expect(result).toStrictEqual([]);
+  });
+
+  test('should include apiKeyValue when provided', () => {
+    const domain: TargetDomain = { protocol: 'https', host: 'api.example.com' };
+    const config: ParsedConfig = {
+      account: '123456789012',
+      domains: [domain],
+      regions: ['us-east-1'],
+      stageName: 'proxy',
+      authType: 'api-key',
+      apiKeyValue: 'shared-api-key',
+    };
+    const result = buildStackConfigsForDomain(domain, config);
+
+    expect(result).toStrictEqual([
+      {
+        domain: { protocol: 'https', host: 'api.example.com' },
+        region: 'us-east-1',
+        account: '123456789012',
+        stageName: 'proxy',
+        authType: 'api-key',
+        apiKeyValue: 'shared-api-key',
+      },
+    ]);
   });
 });
 
