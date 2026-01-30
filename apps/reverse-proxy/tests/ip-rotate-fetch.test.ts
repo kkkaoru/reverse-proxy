@@ -2,8 +2,21 @@
 // Execute with bun: bun test
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { fetchWithAuth } from '../src/ip-rotate/fetch.ts';
-import type { FetchWithAuthParams, IpRotateAuth } from '../src/ip-rotate/types.ts';
+import {
+  calculateMaxRetries,
+  ERROR_ALL_ENDPOINTS_FAILED,
+  ERROR_NO_ENDPOINTS_AVAILABLE,
+  fetchWithAuth,
+  fetchWithRetry,
+  isErrorStatus,
+  STATUS_ERROR_THRESHOLD,
+} from '../src/ip-rotate/fetch.ts';
+import type {
+  FetchWithAuthParams,
+  FetchWithRetryParams,
+  IpRotateAuth,
+  IpRotateConfig,
+} from '../src/ip-rotate/types.ts';
 
 const createApiKeyAuth = (): IpRotateAuth => ({
   type: 'api-key',
@@ -24,6 +37,7 @@ describe('ip-rotate-fetch', () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    vi.spyOn(Math, 'random').mockReturnValue(0);
   });
 
   afterEach(() => {
@@ -200,5 +214,204 @@ describe('ip-rotate-fetch', () => {
 
       await expect(fetchWithAuth(params)).rejects.toThrow('Unsupported auth type: unknown');
     });
+  });
+});
+
+describe('ip-rotate-fetch retry logic', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  test('isErrorStatus returns true for status >= 400', () => {
+    expect(isErrorStatus(400)).toBe(true);
+    expect(isErrorStatus(404)).toBe(true);
+    expect(isErrorStatus(500)).toBe(true);
+    expect(isErrorStatus(STATUS_ERROR_THRESHOLD)).toBe(true);
+  });
+
+  test('isErrorStatus returns false for status < 400', () => {
+    expect(isErrorStatus(200)).toBe(false);
+    expect(isErrorStatus(301)).toBe(false);
+    expect(isErrorStatus(399)).toBe(false);
+  });
+
+  test('calculateMaxRetries returns endpoint count * 2', () => {
+    expect(calculateMaxRetries(3)).toBe(6);
+    expect(calculateMaxRetries(1)).toBe(2);
+    expect(calculateMaxRetries(5)).toBe(10);
+  });
+
+  test('fetchWithRetry returns success on first successful response', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+
+    const config: IpRotateConfig = {
+      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.response.status).toBe(200);
+    }
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('fetchWithRetry retries on 4xx error and succeeds', async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve(new Response('error', { status: 404 }));
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.response.status).toBe(200);
+    }
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('fetchWithRetry retries on 5xx error and succeeds', async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount <= 2) {
+        return Promise.resolve(new Response('error', { status: 500 }));
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.response.status).toBe(200);
+    }
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  test('fetchWithRetry fails after max retries (2 loops)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('error', { status: 500 }));
+
+    const config: IpRotateConfig = {
+      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe(ERROR_ALL_ENDPOINTS_FAILED);
+      expect(result.lastResponse?.status).toBe(500);
+    }
+    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  test('fetchWithRetry returns failure when no endpoints available', async () => {
+    const config: IpRotateConfig = {
+      endpoints: { 'other.com': ['https://api1.other.com'] },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe(ERROR_NO_ENDPOINTS_AVAILABLE);
+    }
+  });
+
+  test('fetchWithRetry uses round-robin across endpoints', async () => {
+    const capturedUrls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrls.push(url);
+      return Promise.resolve(new Response('error', { status: 500 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: { 'example.com': ['https://api1.example.com', 'https://api2.example.com'] },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    await fetchWithRetry(params);
+
+    expect(capturedUrls).toHaveLength(4);
+    expect(capturedUrls[0]).toBe('https://api1.example.com/path');
+    expect(capturedUrls[1]).toBe('https://api2.example.com/path');
+    expect(capturedUrls[2]).toBe('https://api1.example.com/path');
+    expect(capturedUrls[3]).toBe('https://api2.example.com/path');
   });
 });
