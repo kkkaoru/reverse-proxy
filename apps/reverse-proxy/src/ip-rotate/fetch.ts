@@ -13,6 +13,7 @@ import type {
   IpRotateAuthApiKey,
   IpRotateAuthIam,
   RewriteUrlResult,
+  TimeoutConfig,
 } from './types.ts';
 
 // Constants at top
@@ -21,6 +22,49 @@ const AUTH_TYPE_API_KEY: 'api-key' = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
 const ERROR_INVALID_AUTH_TYPE = 'Invalid auth type';
 const ERROR_UNSUPPORTED_AUTH_TYPE = 'Unsupported auth type';
+const ERROR_REQUEST_TIMEOUT = 'Request timed out';
+
+// Timeout constants
+const ENV_DEFAULT_TIMEOUT = 'DEFAULT_TIMEOUT_MS';
+const DEFAULT_TIMEOUT_MS = 3000;
+const MIN_TIMEOUT_MS = 1000;
+const MAX_TIMEOUT_MS = 10000;
+const TIMEOUT_ADJUSTMENT_MS = 500;
+// biome-ignore lint/nursery/noSecrets: TimeoutError is a standard error name, not a secret
+const TIMEOUT_ERROR_NAME = 'TimeoutError';
+
+// Timeout configuration
+const defaultTimeoutConfig: TimeoutConfig = {
+  defaultMs: DEFAULT_TIMEOUT_MS,
+  minMs: MIN_TIMEOUT_MS,
+  maxMs: MAX_TIMEOUT_MS,
+  adjustmentMs: TIMEOUT_ADJUSTMENT_MS,
+} satisfies TimeoutConfig;
+
+// Timeout helper functions
+const parseEnvTimeout = (value: string | undefined): number | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed: number = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const getDefaultTimeoutFromEnv = (envValue: string | undefined): number => {
+  const parsed: number | null = parseEnvTimeout(envValue);
+  return parsed ?? DEFAULT_TIMEOUT_MS;
+};
+
+const clampTimeout = (timeout: number, config: TimeoutConfig): number =>
+  Math.min(Math.max(timeout, config.minMs), config.maxMs);
+
+const adjustTimeoutOnSuccess = (currentTimeout: number, config: TimeoutConfig): number =>
+  clampTimeout(currentTimeout - config.adjustmentMs, config);
+
+const adjustTimeoutOnFailure = (currentTimeout: number, config: TimeoutConfig): number =>
+  clampTimeout(currentTimeout + config.adjustmentMs, config);
+
+const createAbortSignal = (timeoutMs: number): AbortSignal => AbortSignal.timeout(timeoutMs);
 
 // Type for auth handler function
 type AuthHandler = (params: FetchWithAuthParams) => Promise<Response>;
@@ -52,6 +96,7 @@ const fetchWithApiKey = (params: FetchWithAuthParams): Promise<Response> => {
     method: params.method,
     headers: gatewayHeaders,
     body: params.body,
+    signal: params.signal,
   });
 };
 
@@ -71,6 +116,7 @@ const fetchWithIam = async (params: FetchWithAuthParams): Promise<Response> => {
     method: params.method,
     headers: signed.headers,
     body: params.body,
+    signal: params.signal,
   });
 };
 
@@ -119,60 +165,112 @@ const createAuthFromEndpoint = (baseAuth: IpRotateAuth, endpointApiKey: string):
   return baseAuth;
 };
 
-const tryFetchEndpoint = async (
-  params: FetchWithRetryParams,
-): Promise<{ response: Response | null; rewriteSuccess: boolean }> => {
-  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
-    params.config,
-    params.targetUrl,
-    params.counters,
-  );
+interface TryFetchEndpointParams {
+  readonly params: FetchWithRetryParams;
+  readonly timeoutMs: number;
+}
 
-  if (!rewriteResult.success) {
-    return { response: null, rewriteSuccess: false };
-  }
-
-  // Use the endpoint-specific API key from the rewrite result
-  const auth: IpRotateAuth = createAuthFromEndpoint(params.config.auth, rewriteResult.apiKey);
-
-  const response: Response = await fetchWithAuth({
-    url: rewriteResult.url,
-    auth,
-    headers: params.headers,
-    method: params.method,
-    body: params.body,
-  });
-
-  return { response, rewriteSuccess: true };
-};
+interface TryFetchResult {
+  readonly response: Response | null;
+  readonly rewriteSuccess: boolean;
+  readonly timedOut: boolean;
+}
 
 interface RetryAttemptParams {
   readonly params: FetchWithRetryParams;
   readonly attempt: number;
   readonly maxRetries: number;
   readonly lastResponse: Response | null;
+  readonly currentTimeoutMs: number;
+  readonly timeoutConfig: TimeoutConfig;
 }
+
+const isTimeoutError = (error: unknown): boolean =>
+  error instanceof Error && error.name === TIMEOUT_ERROR_NAME;
+
+const tryFetchEndpoint = async (fetchParams: TryFetchEndpointParams): Promise<TryFetchResult> => {
+  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
+    fetchParams.params.config,
+    fetchParams.params.targetUrl,
+    fetchParams.params.counters,
+  );
+
+  if (!rewriteResult.success) {
+    return { response: null, rewriteSuccess: false, timedOut: false };
+  }
+
+  // Use the endpoint-specific API key from the rewrite result
+  const auth: IpRotateAuth = createAuthFromEndpoint(
+    fetchParams.params.config.auth,
+    rewriteResult.apiKey,
+  );
+
+  try {
+    const signal: AbortSignal = createAbortSignal(fetchParams.timeoutMs);
+    const response: Response = await fetchWithAuth({
+      url: rewriteResult.url,
+      auth,
+      headers: fetchParams.params.headers,
+      method: fetchParams.params.method,
+      body: fetchParams.params.body,
+      signal,
+    });
+    return { response, rewriteSuccess: true, timedOut: false };
+  } catch (error: unknown) {
+    if (isTimeoutError(error)) {
+      return { response: null, rewriteSuccess: true, timedOut: true };
+    }
+    throw error;
+  }
+};
 
 const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetryResult> => {
   if (retryParams.attempt >= retryParams.maxRetries) {
     return createFailureResult(retryParams.lastResponse, ERROR_ALL_ENDPOINTS_FAILED);
   }
 
-  const result = await tryFetchEndpoint(retryParams.params);
+  const result: TryFetchResult = await tryFetchEndpoint({
+    params: retryParams.params,
+    timeoutMs: retryParams.currentTimeoutMs,
+  });
 
   if (!result.rewriteSuccess) {
     return createFailureResult(retryParams.lastResponse, ERROR_NO_ENDPOINTS_AVAILABLE);
   }
 
+  // Handle timeout - increase timeout and retry
+  if (result.timedOut) {
+    const newTimeout: number = adjustTimeoutOnFailure(
+      retryParams.currentTimeoutMs,
+      retryParams.timeoutConfig,
+    );
+    return retryAttempt({
+      params: retryParams.params,
+      attempt: retryParams.attempt + 1,
+      maxRetries: retryParams.maxRetries,
+      lastResponse: retryParams.lastResponse,
+      currentTimeoutMs: newTimeout,
+      timeoutConfig: retryParams.timeoutConfig,
+    });
+  }
+
+  // Handle success - decrease timeout for next request
   if (result.response && !isErrorStatus(result.response.status)) {
     return createSuccessResult(result.response);
   }
 
+  // Handle error status - increase timeout and retry
+  const newTimeout: number = adjustTimeoutOnFailure(
+    retryParams.currentTimeoutMs,
+    retryParams.timeoutConfig,
+  );
   return retryAttempt({
     params: retryParams.params,
     attempt: retryParams.attempt + 1,
     maxRetries: retryParams.maxRetries,
     lastResponse: result.response,
+    currentTimeoutMs: newTimeout,
+    timeoutConfig: retryParams.timeoutConfig,
   });
 };
 
@@ -184,21 +282,39 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
   }
 
   const maxRetries: number = calculateMaxRetries(endpointCount);
+  const initialTimeout: number =
+    params.timeoutMs ?? getDefaultTimeoutFromEnv(params.envDefaultTimeoutMs);
+  const timeoutConfig: TimeoutConfig = defaultTimeoutConfig;
 
   return retryAttempt({
     params,
     attempt: 0,
     maxRetries,
     lastResponse: null,
+    currentTimeoutMs: clampTimeout(initialTimeout, timeoutConfig),
+    timeoutConfig,
   });
 };
 
 export {
+  adjustTimeoutOnFailure,
+  adjustTimeoutOnSuccess,
   calculateMaxRetries,
+  clampTimeout,
+  DEFAULT_TIMEOUT_MS,
+  defaultTimeoutConfig,
+  ENV_DEFAULT_TIMEOUT,
   ERROR_ALL_ENDPOINTS_FAILED,
   ERROR_NO_ENDPOINTS_AVAILABLE,
+  ERROR_REQUEST_TIMEOUT,
   fetchWithAuth,
   fetchWithRetry,
+  getDefaultTimeoutFromEnv,
   isErrorStatus,
+  isTimeoutError,
+  MAX_TIMEOUT_MS,
+  MIN_TIMEOUT_MS,
+  parseEnvTimeout,
   STATUS_ERROR_THRESHOLD,
+  TIMEOUT_ADJUSTMENT_MS,
 };
