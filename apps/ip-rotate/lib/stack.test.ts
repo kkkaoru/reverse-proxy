@@ -202,6 +202,45 @@ describe('IpRotateStack', () => {
     });
   });
 
+  describe('Access logging', () => {
+    test('should create CloudWatch Log Group for access logs', () => {
+      const app = createTestApp();
+      const props = createTestStackProps();
+      const stack = new IpRotateStack(app, 'TestStack', props);
+      const template = Template.fromStack(stack);
+
+      template.resourceCountIs('AWS::Logs::LogGroup', 1);
+    });
+
+    test('should configure Log Group with one month retention', () => {
+      const app = createTestApp();
+      const props = createTestStackProps();
+      const stack = new IpRotateStack(app, 'TestStack', props);
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Logs::LogGroup', {
+        RetentionInDays: 30,
+      });
+    });
+
+    test('should configure stage with access log destination', () => {
+      const app = createTestApp();
+      const props = createTestStackProps();
+      const stack = new IpRotateStack(app, 'TestStack', props);
+      const template = Template.fromStack(stack);
+
+      // Verify that the stage has AccessLogSetting configured
+      const stages = template.findResources('AWS::ApiGateway::Stage');
+      const stageLogicalIds = Object.keys(stages);
+      expect(stageLogicalIds.length).toBe(1);
+
+      const stage = stages[stageLogicalIds[0]];
+      expect(stage.Properties.AccessLogSetting).toBeDefined();
+      expect(stage.Properties.AccessLogSetting.DestinationArn).toBeDefined();
+      expect(stage.Properties.AccessLogSetting.Format).toBeDefined();
+    });
+  });
+
   describe('CloudFormation outputs', () => {
     test('should output ApiEndpoint', () => {
       const app = createTestApp();

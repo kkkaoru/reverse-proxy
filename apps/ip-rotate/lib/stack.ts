@@ -2,9 +2,16 @@
 // Execute with bun: bunx cdk synth
 
 import type { StackProps } from 'aws-cdk-lib';
-import { CfnOutput, Stack } from 'aws-cdk-lib';
+import { CfnOutput, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import type { MethodOptions } from 'aws-cdk-lib/aws-apigateway';
-import { EndpointType, HttpIntegration, RestApi } from 'aws-cdk-lib/aws-apigateway';
+import {
+  AccessLogFormat,
+  EndpointType,
+  HttpIntegration,
+  LogGroupLogDestination,
+  RestApi,
+} from 'aws-cdk-lib/aws-apigateway';
+import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import type { AuthResult } from './auth.ts';
 import { createAuthConfig, isApiKeyAuth } from './auth.ts';
@@ -15,6 +22,7 @@ interface IpRotateStackProps extends StackProps {
   readonly targetProtocol: 'http' | 'https';
   readonly stageName: string;
   readonly authType: string;
+  readonly apiKeyValue?: string;
 }
 
 interface ApiResources {
@@ -93,13 +101,38 @@ class IpRotateStack extends Stack {
   }
 
   private createApiResources(props: IpRotateStackProps): ApiResources {
+    // Create CloudWatch Log Group for API Gateway access logs
+    const accessLogGroup = new LogGroup(this, 'ApiAccessLogs', {
+      logGroupName: `/aws/apigateway/${this.stackName}`,
+      retention: RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
     const api: RestApi = new RestApi(this, 'ProxyApi', {
       restApiName: buildApiName(this.region),
       endpointConfiguration: { types: [EndpointType.REGIONAL] },
-      deployOptions: { stageName: props.stageName },
+      deployOptions: {
+        stageName: props.stageName,
+        accessLogDestination: new LogGroupLogDestination(accessLogGroup),
+        accessLogFormat: AccessLogFormat.jsonWithStandardFields({
+          caller: false,
+          httpMethod: true,
+          ip: true,
+          protocol: true,
+          requestTime: true,
+          resourcePath: true,
+          responseLength: true,
+          status: true,
+          user: false,
+        }),
+      },
     });
 
-    const authResult: AuthResult = createAuthConfig(api, props.authType);
+    const authResult: AuthResult = createAuthConfig({
+      api,
+      authType: props.authType,
+      apiKeyValue: props.apiKeyValue,
+    });
     const methodOptions: MethodOptions = authResult.methodOptions;
 
     const integrationParams: CreateIntegrationParams = {
