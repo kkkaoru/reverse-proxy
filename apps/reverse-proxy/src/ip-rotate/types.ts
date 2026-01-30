@@ -50,6 +50,28 @@ interface FetchWithAuthParams {
   readonly body?: string;
 }
 
+interface FetchWithRetryParams {
+  readonly config: IpRotateConfig;
+  readonly targetUrl: URL;
+  readonly counters: Map<string, number>;
+  readonly headers: Record<string, string>;
+  readonly method: string;
+  readonly body?: string;
+}
+
+interface FetchWithRetryResult {
+  readonly success: true;
+  readonly response: Response;
+}
+
+interface FetchWithRetryFailure {
+  readonly success: false;
+  readonly lastResponse: Response | null;
+  readonly error: string;
+}
+
+type FetchRetryResult = FetchWithRetryResult | FetchWithRetryFailure;
+
 interface ParseConfigParams {
   readonly endpointsJson: string | undefined;
   readonly authType: string | undefined;
@@ -72,7 +94,11 @@ interface ParseConfigFailure {
 type ParsedConfig = ParseConfigResult | ParseConfigFailure;
 
 export type {
+  FetchRetryResult,
   FetchWithAuthParams,
+  FetchWithRetryFailure,
+  FetchWithRetryParams,
+  FetchWithRetryResult,
   GetEndpointParams,
   IpRotateAuth,
   IpRotateAuthApiKey,

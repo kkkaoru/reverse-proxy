@@ -3,12 +3,16 @@
 // SECURITY: Auth headers are for API Gateway only, NOT passed to target server
 // API Gateway consumes x-api-key and IAM signature headers before forwarding
 
+import { getEndpointCount, rewriteUrlForIpRotate } from './client.ts';
 import { signRequest } from './signer.ts';
 import type {
+  FetchRetryResult,
   FetchWithAuthParams,
+  FetchWithRetryParams,
   IpRotateAuth,
   IpRotateAuthApiKey,
   IpRotateAuthIam,
+  RewriteUrlResult,
 } from './types.ts';
 
 // Constants at top
@@ -84,4 +88,105 @@ const fetchWithAuth = (params: FetchWithAuthParams): Promise<Response> => {
   return handler(params);
 };
 
-export { fetchWithAuth };
+// Constants for retry logic
+const STATUS_ERROR_THRESHOLD = 400;
+const RETRY_MULTIPLIER = 2;
+const ERROR_ALL_ENDPOINTS_FAILED = 'All endpoints failed';
+const ERROR_NO_ENDPOINTS_AVAILABLE = 'No endpoints available for domain';
+
+// Helper functions for retry logic
+const isErrorStatus = (status: number): boolean => status >= STATUS_ERROR_THRESHOLD;
+
+const calculateMaxRetries = (endpointCount: number): number => endpointCount * RETRY_MULTIPLIER;
+
+const createSuccessResult = (response: Response): FetchRetryResult => ({
+  success: true,
+  response,
+});
+
+const createFailureResult = (lastResponse: Response | null, error: string): FetchRetryResult => ({
+  success: false,
+  lastResponse,
+  error,
+});
+
+const tryFetchEndpoint = async (
+  params: FetchWithRetryParams,
+): Promise<{ response: Response | null; rewriteSuccess: boolean }> => {
+  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
+    params.config,
+    params.targetUrl,
+    params.counters,
+  );
+
+  if (!rewriteResult.success) {
+    return { response: null, rewriteSuccess: false };
+  }
+
+  const response: Response = await fetchWithAuth({
+    url: rewriteResult.url,
+    auth: params.config.auth,
+    headers: params.headers,
+    method: params.method,
+    body: params.body,
+  });
+
+  return { response, rewriteSuccess: true };
+};
+
+interface RetryAttemptParams {
+  readonly params: FetchWithRetryParams;
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly lastResponse: Response | null;
+}
+
+const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetryResult> => {
+  if (retryParams.attempt >= retryParams.maxRetries) {
+    return createFailureResult(retryParams.lastResponse, ERROR_ALL_ENDPOINTS_FAILED);
+  }
+
+  const result = await tryFetchEndpoint(retryParams.params);
+
+  if (!result.rewriteSuccess) {
+    return createFailureResult(retryParams.lastResponse, ERROR_NO_ENDPOINTS_AVAILABLE);
+  }
+
+  if (result.response && !isErrorStatus(result.response.status)) {
+    return createSuccessResult(result.response);
+  }
+
+  return retryAttempt({
+    params: retryParams.params,
+    attempt: retryParams.attempt + 1,
+    maxRetries: retryParams.maxRetries,
+    lastResponse: result.response,
+  });
+};
+
+const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult> => {
+  const endpointCount: number = getEndpointCount(params.config, params.targetUrl.host);
+
+  if (endpointCount === 0) {
+    return Promise.resolve(createFailureResult(null, ERROR_NO_ENDPOINTS_AVAILABLE));
+  }
+
+  const maxRetries: number = calculateMaxRetries(endpointCount);
+
+  return retryAttempt({
+    params,
+    attempt: 0,
+    maxRetries,
+    lastResponse: null,
+  });
+};
+
+export {
+  calculateMaxRetries,
+  ERROR_ALL_ENDPOINTS_FAILED,
+  ERROR_NO_ENDPOINTS_AVAILABLE,
+  fetchWithAuth,
+  fetchWithRetry,
+  isErrorStatus,
+  STATUS_ERROR_THRESHOLD,
+};
