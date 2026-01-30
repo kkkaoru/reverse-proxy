@@ -1,7 +1,7 @@
 // IP Rotation client tests
 // Execute with bun: bun test
 
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   AUTH_TYPE_API_KEY,
   AUTH_TYPE_IAM,
@@ -27,6 +27,14 @@ const createTestConfig = (): IpRotateConfig => ({
 });
 
 describe('ip-rotate-client', () => {
+  beforeEach(() => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe('AUTH_TYPE constants', () => {
     test('AUTH_TYPE_API_KEY should be api-key', () => {
       expect(AUTH_TYPE_API_KEY).toBe('api-key');
