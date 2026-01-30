@@ -13,20 +13,14 @@ id = "${CLOUDFLARE_KV_NAMESPACE_ID}"
 
 [vars]
 API_DOMAIN = "${API_DOMAIN}"
-# IP Rotation configuration (optional)
-# IP_ROTATE_AUTH_TYPE = "api-key"  # or "iam"
-# IP_ROTATE_API_KEY = "${IP_ROTATE_API_KEY}"
-# IP_ROTATE_ENDPOINTS = '''
-# {
-#   "api.example.com": [
-#     "https://abc123.execute-api.us-east-1.amazonaws.com/proxy",
-#     "https://def456.execute-api.eu-west-1.amazonaws.com/proxy"
-#   ]
-# }
-# '''
-# AWS_ACCESS_KEY_ID = "${AWS_ACCESS_KEY_ID}"
-# AWS_SECRET_ACCESS_KEY = "${AWS_SECRET_ACCESS_KEY}"
-# AWS_REGION = "us-east-1"
+# IP Rotate configuration (optional)
+# Note: For production, consider using `wrangler secret put` for sensitive values
+IP_ROTATE_ENDPOINTS = '${IP_ROTATE_ENDPOINTS}'
+IP_ROTATE_AUTH_TYPE = "${IP_ROTATE_AUTH_TYPE}"
+IP_ROTATE_API_KEY = "${IP_ROTATE_API_KEY}"
+IP_ROTATE_AWS_ACCESS_KEY_ID = "${IP_ROTATE_AWS_ACCESS_KEY_ID}"
+IP_ROTATE_AWS_SECRET_ACCESS_KEY = "${IP_ROTATE_AWS_SECRET_ACCESS_KEY}"
+IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
 
 [observability.logs]
 enabled = true
