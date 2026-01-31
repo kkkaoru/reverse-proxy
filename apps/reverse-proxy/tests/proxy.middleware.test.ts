@@ -59,7 +59,7 @@ describe('proxy middleware routing', () => {
   it('passes through unsupported methods', async () => {
     setupEnvironment();
     const app: TestApp = createAppWithMiddleware();
-    const response: Response = await requestWithEnv(app, '/', { method: 'POST' });
+    const response: Response = await requestWithEnv(app, '/', { method: 'PATCH' });
     expect(response.status).toBe(404);
   });
 
@@ -188,5 +188,85 @@ describe('proxy middleware KV cache', () => {
 
     expect(response.status).toBe(404);
     expect(mockKV.put).not.toHaveBeenCalled();
+  });
+});
+
+interface BatchResultItem {
+  result: string;
+  httpStatus: number;
+  url: string;
+  body: string;
+}
+
+interface ErrorResponseBody {
+  error: string;
+}
+
+describe('proxy middleware POST batch', () => {
+  it('handles POST request with valid urls array', async () => {
+    setupEnvironment(() =>
+      Promise.resolve(
+        new Response('<html>ok</html>', {
+          status: 200,
+          headers: { 'content-type': CONTENT_TYPE_HTML },
+        }),
+      ),
+    );
+    const app: TestApp = createAppWithMiddleware();
+    const response: Response = await requestWithEnv(app, '/', {
+      method: 'POST',
+      body: JSON.stringify({ urls: ['https://example.com'] }),
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body: BatchResultItem[] = await response.json();
+    expect(body.length).toBe(1);
+    const first: BatchResultItem | undefined = body[0];
+    expect(first?.result).toBe('success');
+  });
+
+  it('returns 400 for invalid JSON body', async () => {
+    setupEnvironment();
+    const app: TestApp = createAppWithMiddleware();
+    const response: Response = await requestWithEnv(app, '/', {
+      method: 'POST',
+      body: 'invalid json',
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(400);
+    const body: ErrorResponseBody = await response.json();
+    expect(body.error).toBe('Request body must be valid JSON');
+  });
+
+  it('returns 400 for missing urls field', async () => {
+    setupEnvironment();
+    const app: TestApp = createAppWithMiddleware();
+    const response: Response = await requestWithEnv(app, '/', {
+      method: 'POST',
+      body: JSON.stringify({ other: 'field' }),
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(400);
+    const body: ErrorResponseBody = await response.json();
+    expect(body.error).toBe('Request body must contain "urls" array');
+  });
+
+  it('blocks SSRF attempts in batch request', async () => {
+    setupEnvironment();
+    const app: TestApp = createAppWithMiddleware();
+    const response: Response = await requestWithEnv(app, '/', {
+      method: 'POST',
+      body: JSON.stringify({ urls: ['https://localhost/admin'] }),
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body: BatchResultItem[] = await response.json();
+    const first: BatchResultItem | undefined = body[0];
+    expect(first?.result).toBe('ssrf_blocked');
+    expect(first?.httpStatus).toBe(422);
   });
 });
