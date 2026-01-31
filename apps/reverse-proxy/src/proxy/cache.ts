@@ -147,3 +147,68 @@ export const deleteKvCache = async (
   await kv.delete(kvCacheKey);
   return true;
 };
+
+// Delete KV cache by prefix - returns deleted keys
+export interface PrefixDeleteResult {
+  readonly deletedCount: number;
+  readonly deletedKeys: readonly string[];
+}
+
+interface DeletePageParams {
+  readonly kv: KVNamespace;
+  readonly prefix: string;
+  readonly cursor: string | undefined;
+  readonly accumulator: readonly string[];
+}
+
+// Delete keys from a single page and return updated accumulator
+const deleteKeysFromPage = async (
+  kv: KVNamespace,
+  keys: readonly { name: string }[],
+): Promise<readonly string[]> => {
+  const keyNames: readonly string[] = keys.map((key: { name: string }): string => key.name);
+  await Promise.all(keyNames.map((name: string): Promise<void> => kv.delete(name)));
+  return keyNames;
+};
+
+// Recursively delete all keys matching prefix
+const deleteKvCacheByPrefixRecursive = async (
+  params: DeletePageParams,
+): Promise<readonly string[]> => {
+  const listResult: KVNamespaceListResult<unknown, string> = await params.kv.list({
+    prefix: params.prefix,
+    cursor: params.cursor,
+  });
+
+  const deletedFromPage: readonly string[] = await deleteKeysFromPage(params.kv, listResult.keys);
+  const newAccumulator: readonly string[] = [...params.accumulator, ...deletedFromPage];
+
+  if (listResult.list_complete) {
+    return newAccumulator;
+  }
+
+  return deleteKvCacheByPrefixRecursive({
+    kv: params.kv,
+    prefix: params.prefix,
+    cursor: listResult.cursor,
+    accumulator: newAccumulator,
+  });
+};
+
+export const deleteKvCacheByPrefix = async (
+  kv: KVNamespace | undefined,
+  prefix: string,
+): Promise<PrefixDeleteResult> => {
+  if (!kv) {
+    return { deletedCount: 0, deletedKeys: [] };
+  }
+
+  const deletedKeys: readonly string[] = await deleteKvCacheByPrefixRecursive({
+    kv,
+    prefix,
+    cursor: undefined,
+    accumulator: [],
+  });
+
+  return { deletedCount: deletedKeys.length, deletedKeys };
+};
