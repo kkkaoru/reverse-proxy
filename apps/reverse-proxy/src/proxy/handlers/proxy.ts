@@ -13,7 +13,7 @@ import {
   STATUS_BAD_REQUEST,
 } from '../constants.ts';
 import { getErrorMessage } from '../errors.ts';
-import { fetchAndCache } from '../fetch.ts';
+import { fetchAndCache } from '../fetch/core.ts';
 import { createErrorResponse } from '../responses.ts';
 import type { ParsedUrl, ProxyCacheOptions } from '../types.ts';
 import { parseTargetUrl } from '../url.ts';
