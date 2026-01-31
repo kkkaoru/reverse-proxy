@@ -13,6 +13,8 @@ id = "${CLOUDFLARE_KV_NAMESPACE_ID}"
 
 [vars]
 API_DOMAIN = "${API_DOMAIN}"
+# Cache API control (optional, default: false)
+ENABLE_CACHE_API = "${ENABLE_CACHE_API}"
 # IP Rotate configuration (optional)
 # Note: For production, consider using `wrangler secret put` for sensitive values
 IP_ROTATE_ENDPOINTS = '${IP_ROTATE_ENDPOINTS}'

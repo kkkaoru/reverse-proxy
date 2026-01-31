@@ -65,11 +65,14 @@ export const handleProxyRequest = async (
   }
 
   const cacheKey: string = createCacheKey(parsed.value, new Date());
-  const cached: Response | undefined = await caches.default.match(cacheKey);
 
-  if (cached) {
-    logEvent(options, LOG_EVENT_CACHE_HIT, { target });
-    return convertResponseToUtf8(cached.clone());
+  if (options.enableCacheApi) {
+    const cached: Response | undefined = await caches.default.match(cacheKey);
+
+    if (cached) {
+      logEvent(options, LOG_EVENT_CACHE_HIT, { target });
+      return convertResponseToUtf8(cached.clone());
+    }
   }
 
   logEvent(options, LOG_EVENT_CACHE_MISS, { target });
@@ -102,9 +105,11 @@ export const handleDeleteRequest = async (
     return createErrorResponse(parsed.message, STATUS_BAD_REQUEST);
   }
 
-  // Delete from Cache API (exact match for today's cache key)
+  // Delete from Cache API (exact match for today's cache key) - only if enabled
   const cacheKey: string = createCacheKey(parsed.value, new Date());
-  const cacheDeleted: boolean = await caches.default.delete(cacheKey);
+  const cacheDeleted: boolean = options.enableCacheApi
+    ? await caches.default.delete(cacheKey)
+    : false;
 
   // Delete from KV using prefix match
   const kvPrefix: string = `${KV_CACHE_KEY_PREFIX}-${options.cacheVersion}::${parsed.value.toString()}`;

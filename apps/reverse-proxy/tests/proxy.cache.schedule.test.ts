@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { app, type ReverseProxyBindings } from '../src/app.ts';
 import { setupEnvironment } from './helpers.ts';
 
-const DEFAULT_ENV: ReverseProxyBindings = { CACHE_VERSION: 'v1' };
+const DEFAULT_ENV: ReverseProxyBindings = { CACHE_VERSION: 'v1', ENABLE_CACHE_API: 'true' };
 
 describe('reverse proxy cache behavior', () => {
   it('caches upstream response and serves cached content on subsequent request', async () => {

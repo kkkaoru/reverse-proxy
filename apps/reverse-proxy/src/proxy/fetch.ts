@@ -117,7 +117,9 @@ export const processFetchResponse = async (
     return response;
   }
 
-  await cacheResponse(params.cacheKey, response);
+  if (params.options.enableCacheApi) {
+    await cacheResponse(params.cacheKey, response);
+  }
   await storeInKvCache(params, response);
   return response;
 };

@@ -11,6 +11,7 @@ export interface ProxyCacheStaticOptions {
 export interface ProxyCacheEnv {
   KV?: KVNamespace;
   CACHE_VERSION?: string;
+  ENABLE_CACHE_API?: string;
   IP_ROTATE_ENDPOINTS?: string;
   IP_ROTATE_AUTH_TYPE?: string;
   IP_ROTATE_API_KEY?: string;
@@ -22,6 +23,7 @@ export interface ProxyCacheEnv {
 // Internal interfaces
 export interface ProxyCacheOptions {
   enableLogging: boolean;
+  enableCacheApi: boolean;
   kv?: KVNamespace;
   cacheVersion: string;
   ipRotateConfig?: IpRotateConfig;

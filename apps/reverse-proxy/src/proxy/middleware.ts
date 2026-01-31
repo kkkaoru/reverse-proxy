@@ -52,6 +52,7 @@ const createOptionsFromEnv = (
   counters: Map<string, number>,
 ): ProxyCacheOptions => ({
   enableLogging: staticOptions.enableLogging,
+  enableCacheApi: env.ENABLE_CACHE_API === 'true',
   kv: env.KV,
   cacheVersion: env.CACHE_VERSION ?? DEFAULT_CACHE_VERSION,
   ipRotateConfig: parseIpRotateConfigFromEnv(env),
