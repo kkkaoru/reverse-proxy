@@ -72,8 +72,29 @@ const getNextEndpoint = (params: GetEndpointParams): GetNextEndpointResult | nul
   return { endpoint: endpointEntry.endpoint, apiKey: endpointEntry.apiKey };
 };
 
-const buildRewrittenUrl = (endpoint: string, targetUrl: URL): URL =>
-  new URL(`${endpoint}${targetUrl.pathname}${targetUrl.search}`);
+// Double-encode specific query parameters to preserve encoding through API Gateway
+const DOUBLE_ENCODE_PARAMS: readonly string[] = ['word'];
+
+const doubleEncodeQueryParam = (search: string, paramName: string): string => {
+  const pattern: RegExp = new RegExp(`(${paramName}=)([^&]*)`, 'gi');
+  return search.replace(pattern, (_match, prefix: string, value: string) => {
+    const doubleEncoded: string = encodeURIComponent(value);
+    return `${prefix}${doubleEncoded}`;
+  });
+};
+
+const doubleEncodeSearchParams = (search: string): string => {
+  let result: string = search;
+  for (const param of DOUBLE_ENCODE_PARAMS) {
+    result = doubleEncodeQueryParam(result, param);
+  }
+  return result;
+};
+
+const buildRewrittenUrl = (endpoint: string, targetUrl: URL): URL => {
+  const encodedSearch: string = doubleEncodeSearchParams(targetUrl.search);
+  return new URL(`${endpoint}${targetUrl.pathname}${encodedSearch}`);
+};
 
 const rewriteUrlForIpRotate = (
   config: IpRotateConfig,
