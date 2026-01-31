@@ -7,6 +7,7 @@ const DEFAULT_ENCODING = 'utf-8';
 const CHARSET_META_REGEX = /<meta[^>]+charset=["']?([^"'\s>]+)/i;
 const CONTENT_TYPE_META_REGEX = /<meta[^>]+content=["'][^"']*charset=([^"'\s;]+)/i;
 const XML_ENCODING_REGEX = /<\?xml[^>]+encoding=["']([^"']+)/i;
+const CHARSET_CONTENT_TYPE_REGEX = /charset=([^;\s]+)/i;
 
 interface EncodingDetectionResult {
   encoding: string;
@@ -63,9 +64,15 @@ const isUtf8 = (encoding: string): boolean => {
   return normalized === 'utf-8' || normalized === 'utf8';
 };
 
-export const convertToUtf8 = (html: string): string => {
-  const detection = detectEncodingFromHtml(html);
-  const encoding = normalizeEncodingName(detection.encoding);
+export const convertToUtf8 = (html: string, detectedCharset?: string): string => {
+  // Use detected charset from browser if provided, otherwise detect from HTML
+  let encoding: string;
+  if (detectedCharset) {
+    encoding = normalizeEncodingName(detectedCharset);
+  } else {
+    const detection = detectEncodingFromHtml(html);
+    encoding = normalizeEncodingName(detection.encoding);
+  }
 
   // Already UTF-8, return as-is
   if (isUtf8(encoding)) {
@@ -78,11 +85,59 @@ export const convertToUtf8 = (html: string): string => {
     return html;
   }
 
-  // Convert from detected encoding to UTF-8
-  const buffer = iconv.encode(html, encoding);
-  const utf8Html = iconv.decode(buffer, 'utf-8');
+  // Convert string to binary buffer using latin1 (preserves byte values)
+  // then decode from the detected encoding to UTF-8
+  const binaryBuffer = Buffer.from(html, 'latin1');
+  const utf8Html = iconv.decode(binaryBuffer, encoding);
 
-  return utf8Html;
+  // Update meta charset to UTF-8
+  const updatedHtml = utf8Html
+    .replace(CHARSET_META_REGEX, '<meta charset="UTF-8"')
+    .replace(
+      CONTENT_TYPE_META_REGEX,
+      '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"',
+    );
+
+  return updatedHtml;
+};
+
+export const convertBufferToUtf8 = (buffer: Buffer, contentType?: string | null): string => {
+  // Try to detect encoding from Content-Type header
+  let encoding = DEFAULT_ENCODING;
+  if (contentType) {
+    const charsetMatch = contentType.match(CHARSET_CONTENT_TYPE_REGEX);
+    if (charsetMatch?.[1]) {
+      encoding = normalizeEncodingName(charsetMatch[1]);
+    }
+  }
+
+  // If no encoding from header, try to detect from HTML content
+  if (encoding === DEFAULT_ENCODING) {
+    // Peek at the first part of the buffer as latin1 to find charset
+    const preview = buffer.slice(0, 2048).toString('latin1');
+    const detection = detectEncodingFromHtml(preview);
+    encoding = normalizeEncodingName(detection.encoding);
+  }
+
+  // Decode buffer using detected encoding
+  if (!iconv.encodingExists(encoding)) {
+    console.warn(`Unsupported encoding: ${encoding}, falling back to UTF-8`);
+    encoding = 'utf-8';
+  }
+
+  const html = iconv.decode(buffer, encoding);
+
+  // Update meta charset to UTF-8 if not already
+  if (!isUtf8(encoding)) {
+    return html
+      .replace(CHARSET_META_REGEX, '<meta charset="UTF-8"')
+      .replace(
+        CONTENT_TYPE_META_REGEX,
+        '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"',
+      );
+  }
+
+  return html;
 };
 
 export const detectEncoding = (html: string): string => {
