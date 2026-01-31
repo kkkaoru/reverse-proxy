@@ -249,7 +249,9 @@
       }
     },
     {
-      "includes": ["apps/reverse-proxy/src/ip-rotate/*.test.ts"],
+      "includes": ["apps/reverse-proxy/src/ip-rotate/*.test.ts",
+        "apps/reverse-proxy/src/proxy/fetch.test.ts"
+      ],
       "linter": {
         "rules": {
           "nursery": {
