@@ -156,3 +156,4 @@ temp
 # local temp file
 temp.txt
 **/cdk.out
+.serena
