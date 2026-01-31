@@ -10,11 +10,8 @@ vi.mock('../../src/services/browser-launcher.ts', () => ({
 }));
 
 import { launchBrowser } from '../../src/services/browser-launcher.ts';
-import {
-  buildStorageStateKeyForTest,
-  executeSignInFlow,
-  fetchPageWithSignIn,
-} from '../../src/services/signin.ts';
+import { executeSignInFlow, fetchPageWithSignIn } from '../../src/services/signin.ts';
+import { buildStorageStateKey } from '../../src/utils/storage-state.ts';
 import { createInMemoryD1Database, createMockKVNamespace, type InMemoryD1Row } from '../helpers.ts';
 
 interface MockCookie {
@@ -91,14 +88,14 @@ const createMockBrowser = (context: MockContext): MockBrowser => ({
   close: vi.fn().mockResolvedValue(undefined),
 });
 
-describe('buildStorageStateKeyForTest', () => {
+describe('buildStorageStateKey', () => {
   it('should build key with domain and userId', () => {
-    const result = buildStorageStateKeyForTest('example.com', 'user@example.com');
+    const result = buildStorageStateKey('example.com', 'user@example.com');
     expect(result).toBe('storage-state::example.com::user@example.com');
   });
 
   it('should handle special characters in userId', () => {
-    const result = buildStorageStateKeyForTest('example.com', 'user+alias@example.com');
+    const result = buildStorageStateKey('example.com', 'user+alias@example.com');
     expect(result).toBe('storage-state::example.com::user+alias@example.com');
   });
 });

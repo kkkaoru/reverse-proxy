@@ -5,6 +5,7 @@ import type { Browser, BrowserWorker } from '@cloudflare/playwright';
 import type { D1Database } from '@cloudflare/workers-types';
 import { findSignInSelectorByDomain } from '../repositories/sign-in-selectors.ts';
 import { findSignedInValidationByDomain } from '../repositories/signed-in-validation.ts';
+import { buildStorageStateKey } from '../utils/storage-state.ts';
 import {
   deserializeStorageState,
   fetchPage,
@@ -42,11 +43,6 @@ interface FetchWithSignInResult {
   signedIn: boolean;
   errorMessage?: string;
 }
-
-const STORAGE_STATE_KEY_PREFIX = 'storage-state';
-
-const buildStorageStateKey = (domain: string, userId: string): string =>
-  `${STORAGE_STATE_KEY_PREFIX}::${domain}::${userId}`;
 
 export const executeSignInFlow = async (params: SignInFlowParams): Promise<SignInFlowResult> => {
   const selector = await findSignInSelectorByDomain(params.db, params.domain);
@@ -189,6 +185,3 @@ export const fetchPageWithSignIn = async (
 
   return refetchAfterSignIn(ctx);
 };
-
-export const buildStorageStateKeyForTest = (domain: string, userId: string): string =>
-  buildStorageStateKey(domain, userId);
