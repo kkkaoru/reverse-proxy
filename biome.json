@@ -203,7 +203,10 @@
       "includes": [
         "apps/reverse-proxy/tests/encoding.test.ts",
         "apps/reverse-proxy/tests/proxy.middleware.test.ts",
-        "apps/reverse-proxy/tests/playwright.test.ts"
+        "apps/reverse-proxy/tests/playwright.test.ts",
+        "apps/reverse-proxy/tests/proxy.url.test.ts",
+        "apps/reverse-proxy/tests/proxy.errors.test.ts",
+        "apps/reverse-proxy/tests/proxy.options.test.ts"
       ],
       "linter": {
         "rules": {
