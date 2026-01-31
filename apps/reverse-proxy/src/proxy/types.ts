@@ -117,13 +117,20 @@ export interface SsrfValidationFailure {
 export type SsrfValidationResult = SsrfValidationSuccess | SsrfValidationFailure;
 
 // Batch fetch types
-export type BatchResultStatus = 'success' | 'error' | 'ssrf_blocked' | 'timeout' | 'skipped';
+export type BatchResultStatus =
+  | 'success'
+  | 'error'
+  | 'ssrf_blocked'
+  | 'timeout'
+  | 'skipped'
+  | 'cache_hit';
 
 export interface BatchFetchResult {
   readonly url: string;
   readonly httpStatus: number;
   readonly result: BatchResultStatus;
   readonly body: string;
+  readonly contentType?: string;
 }
 
 export interface BatchRequestBody {

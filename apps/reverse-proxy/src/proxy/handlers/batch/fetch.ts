@@ -3,25 +3,83 @@
 
 import { convertResponseToUtf8 } from '../../../utils/encoding.ts';
 import {
+  createKvCacheKey,
+  logEvent,
+  setKvCachedContent,
+  tryGetKvCache,
+} from '../../cache.ts';
+import {
   ERROR_FETCH_FAILED,
+  HEADER_CONTENT_TYPE,
+  LOG_EVENT_KV_CACHE_SET,
+  RESULT_CACHE_HIT,
   RESULT_ERROR,
   RESULT_SSRF_BLOCKED,
   RESULT_SUCCESS,
   STATUS_BAD_GATEWAY,
   STATUS_CLIENT_ERROR_START,
+  STATUS_OK,
   STATUS_UNPROCESSABLE_ENTITY,
 } from '../../constants.ts';
 import { performFetch } from '../../fetch/core.ts';
 import { buildFetchHeaders } from '../../fetch/headers.ts';
+import { isCacheableStatus } from '../../fetch/status.ts';
 import type {
   BatchFetchResult,
   BatchResultStatus,
+  ProxyCacheOptions,
   SingleFetchParams,
   SsrfValidationResult,
 } from '../../types.ts';
 import { validateUrlWithSsrf } from '../../url.ts';
 
-// Fetch single URL with SSRF validation
+// Try to get cached result from KV
+const tryGetCachedResult = async (
+  url: string,
+  options: ProxyCacheOptions,
+): Promise<BatchFetchResult | null> => {
+  const kvCacheKey: string = createKvCacheKey(url, options.cacheVersion);
+  const cached: Response | null = await tryGetKvCache(options, url, kvCacheKey);
+
+  if (!cached) {
+    return null;
+  }
+
+  const body: string = await cached.text();
+  const contentType: string = cached.headers.get(HEADER_CONTENT_TYPE) ?? '';
+
+  return {
+    url,
+    httpStatus: STATUS_OK,
+    result: RESULT_CACHE_HIT,
+    body,
+    contentType,
+  };
+};
+
+// Store successful response in KV cache
+const storeInKvCacheForBatch = async (
+  url: string,
+  body: string,
+  contentType: string,
+  options: ProxyCacheOptions,
+): Promise<void> => {
+  if (!options.kv) {
+    return;
+  }
+
+  const kvCacheKey: string = createKvCacheKey(url, options.cacheVersion);
+
+  await setKvCachedContent({
+    kv: options.kv,
+    cacheKey: kvCacheKey,
+    data: { content: body, contentType },
+  });
+
+  logEvent(options, LOG_EVENT_KV_CACHE_SET, { target: url, cacheKey: kvCacheKey });
+};
+
+// Fetch single URL with SSRF validation and caching
 export const fetchSingleUrl = async (params: SingleFetchParams): Promise<BatchFetchResult> => {
   const validation: SsrfValidationResult = validateUrlWithSsrf(params.url);
 
@@ -34,14 +92,31 @@ export const fetchSingleUrl = async (params: SingleFetchParams): Promise<BatchFe
     };
   }
 
+  // Try KV cache first
+  const cachedResult: BatchFetchResult | null = await tryGetCachedResult(
+    params.url,
+    params.options,
+  );
+
+  if (cachedResult) {
+    return cachedResult;
+  }
+
   const headers: Record<string, string> = buildFetchHeaders(validation.url.origin);
 
   try {
     const response: Response = await performFetch(params.options, params.url, headers);
     const converted: Response = await convertResponseToUtf8(response);
     const body: string = await converted.text();
+    const contentType: string = converted.headers.get(HEADER_CONTENT_TYPE) ?? '';
     const result: BatchResultStatus =
       response.status < STATUS_CLIENT_ERROR_START ? RESULT_SUCCESS : RESULT_ERROR;
+
+    // Store in KV cache if response is cacheable
+    if (isCacheableStatus(response.status)) {
+      await storeInKvCacheForBatch(params.url, body, contentType, params.options);
+    }
+
     return { url: params.url, httpStatus: response.status, result, body };
   } catch {
     return {

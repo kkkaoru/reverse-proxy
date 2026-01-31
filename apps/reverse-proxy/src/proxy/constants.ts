@@ -131,3 +131,4 @@ export const RESULT_SUCCESS: 'success' = 'success';
 export const RESULT_ERROR: 'error' = 'error';
 export const RESULT_SSRF_BLOCKED: 'ssrf_blocked' = 'ssrf_blocked';
 export const RESULT_SKIPPED: 'skipped' = 'skipped';
+export const RESULT_CACHE_HIT: 'cache_hit' = 'cache_hit';

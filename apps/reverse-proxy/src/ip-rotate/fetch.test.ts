@@ -552,14 +552,14 @@ test('fetchWithRetry correctly matches URL and API key on each request', async (
   }
 
   // Verify round-robin order
-  expect(capturedRequests[0].url).toContain('gateway-1');
-  expect(capturedRequests[0].apiKey).toBe('key-for-gateway-1');
-  expect(capturedRequests[1].url).toContain('gateway-2');
-  expect(capturedRequests[1].apiKey).toBe('key-for-gateway-2');
-  expect(capturedRequests[2].url).toContain('gateway-1');
-  expect(capturedRequests[2].apiKey).toBe('key-for-gateway-1');
-  expect(capturedRequests[3].url).toContain('gateway-2');
-  expect(capturedRequests[3].apiKey).toBe('key-for-gateway-2');
+  expect(capturedRequests[0]?.url).toContain('gateway-1');
+  expect(capturedRequests[0]?.apiKey).toBe('key-for-gateway-1');
+  expect(capturedRequests[1]?.url).toContain('gateway-2');
+  expect(capturedRequests[1]?.apiKey).toBe('key-for-gateway-2');
+  expect(capturedRequests[2]?.url).toContain('gateway-1');
+  expect(capturedRequests[2]?.apiKey).toBe('key-for-gateway-1');
+  expect(capturedRequests[3]?.url).toContain('gateway-2');
+  expect(capturedRequests[3]?.apiKey).toBe('key-for-gateway-2');
 });
 
 test('fetchWithRetry returns lastUsedEndpoint on failure', async () => {
