@@ -5,13 +5,15 @@ import { convertResponseToUtf8 } from '../utils/encoding.ts';
 import {
   createCacheKey,
   createKvCacheKey,
-  deleteKvCache,
+  deleteKvCacheByPrefix,
   logEvent,
+  type PrefixDeleteResult,
   tryGetKvCache,
 } from './cache.ts';
 import {
   ERROR_INVALID_URL,
   ERROR_UNKNOWN_FETCH,
+  KV_CACHE_KEY_PREFIX,
   LOG_EVENT_CACHE_HIT,
   LOG_EVENT_CACHE_MISS,
   LOG_EVENT_DELETE,
@@ -88,7 +90,7 @@ export const handleProxyRequest = async (
   }
 };
 
-// Handle DELETE request
+// Handle DELETE request - delete all cache entries matching prefix
 export const handleDeleteRequest = async (
   target: string,
   options: ProxyCacheOptions,
@@ -100,16 +102,33 @@ export const handleDeleteRequest = async (
     return createErrorResponse(parsed.message, STATUS_BAD_REQUEST);
   }
 
+  // Delete from Cache API (exact match for today's cache key)
   const cacheKey: string = createCacheKey(parsed.value, new Date());
-  const kvCacheKey: string = createKvCacheKey(parsed.value.toString(), options.cacheVersion);
-
   const cacheDeleted: boolean = await caches.default.delete(cacheKey);
-  const kvDeleted: boolean = await deleteKvCache(options.kv, kvCacheKey);
-  const deleted: boolean = cacheDeleted || kvDeleted;
+
+  // Delete from KV using prefix match
+  const kvPrefix: string = `${KV_CACHE_KEY_PREFIX}-${options.cacheVersion}::${parsed.value.toString()}`;
+  const kvResult: PrefixDeleteResult = await deleteKvCacheByPrefix(options.kv, kvPrefix);
+
+  const deleted: boolean = cacheDeleted || kvResult.deletedCount > 0;
   const status: number = deleted ? STATUS_OK : STATUS_NOT_FOUND;
 
-  logEvent(options, LOG_EVENT_DELETE, { target, deleted, cacheDeleted, kvDeleted });
-  return createJsonResponse({ deleted, cacheDeleted, kvDeleted }, status);
+  logEvent(options, LOG_EVENT_DELETE, {
+    target,
+    deleted,
+    cacheDeleted,
+    kvDeletedCount: kvResult.deletedCount,
+  });
+
+  return createJsonResponse(
+    {
+      deleted,
+      cacheDeleted,
+      kvDeletedCount: kvResult.deletedCount,
+      kvDeletedKeys: kvResult.deletedKeys,
+    },
+    status,
+  );
 };
 
 // Create handler map

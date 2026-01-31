@@ -65,6 +65,7 @@ export interface LogEventDetail {
   deleted?: boolean;
   cacheDeleted?: boolean;
   kvDeleted?: boolean;
+  kvDeletedCount?: number;
   method?: string;
   cacheKey?: string;
   ipRotateUrl?: string;
