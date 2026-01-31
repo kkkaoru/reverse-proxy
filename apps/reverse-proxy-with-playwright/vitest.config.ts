@@ -8,6 +8,7 @@ const ROOT_DIR: string = fileURLToPath(new URL('.', import.meta.url));
 export default defineConfig({
   root: ROOT_DIR,
   test: {
+    globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     coverage: {
