@@ -7,7 +7,7 @@ import {
   BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
   BROWSER_WAIT_UNTIL_NETWORKIDLE,
 } from '../constants/index.ts';
-import { convertToUtf8 } from '../utils/encoding.ts';
+// Note: Playwright handles encoding automatically via browser engine
 import { launchBrowser } from './browser-launcher.ts';
 
 type SameSiteValue = 'Strict' | 'Lax' | 'None';
@@ -109,8 +109,9 @@ export const fetchPage = async (
       timeout: BROWSER_DEFAULT_TIMEOUT_MS,
     });
 
-    const rawHtml: string = await page.content();
-    const html: string = convertToUtf8(rawHtml);
+    // Get HTML content (Playwright already handles encoding correctly)
+    const html: string = await page.content();
+
     const rawStorageState = await context.storageState();
     const storageState: StorageState = convertToStorageState(rawStorageState);
 
