@@ -200,7 +200,11 @@
       }
     },
     {
-      "includes": ["apps/reverse-proxy/tests/encoding.test.ts", "apps/reverse-proxy/tests/proxy.middleware.test.ts", "apps/reverse-proxy/tests/playwright.test.ts"],
+      "includes": [
+        "apps/reverse-proxy/tests/encoding.test.ts",
+        "apps/reverse-proxy/tests/proxy.middleware.test.ts",
+        "apps/reverse-proxy/tests/playwright.test.ts"
+      ],
       "linter": {
         "rules": {
           "nursery": {
