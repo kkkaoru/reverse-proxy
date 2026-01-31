@@ -151,9 +151,14 @@ const createSuccessResult = (response: Response, usedEndpoint: string): FetchRet
   usedEndpoint,
 });
 
-const createFailureResult = (lastResponse: Response | null, error: string): FetchRetryResult => ({
+const createFailureResult = (
+  lastResponse: Response | null,
+  lastUsedEndpoint: string | null,
+  error: string,
+): FetchRetryResult => ({
   success: false,
   lastResponse,
+  lastUsedEndpoint,
   error,
 });
 
@@ -231,7 +236,11 @@ const tryFetchEndpoint = async (fetchParams: TryFetchEndpointParams): Promise<Tr
 
 const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetryResult> => {
   if (retryParams.attempt >= retryParams.maxRetries) {
-    return createFailureResult(retryParams.lastResponse, ERROR_ALL_ENDPOINTS_FAILED);
+    return createFailureResult(
+      retryParams.lastResponse,
+      retryParams.lastUsedEndpoint,
+      ERROR_ALL_ENDPOINTS_FAILED,
+    );
   }
 
   const result: TryFetchResult = await tryFetchEndpoint({
@@ -240,7 +249,11 @@ const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetry
   });
 
   if (!result.rewriteSuccess) {
-    return createFailureResult(retryParams.lastResponse, ERROR_NO_ENDPOINTS_AVAILABLE);
+    return createFailureResult(
+      retryParams.lastResponse,
+      retryParams.lastUsedEndpoint,
+      ERROR_NO_ENDPOINTS_AVAILABLE,
+    );
   }
 
   // Handle timeout - increase timeout and retry
@@ -285,7 +298,7 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
   const endpointCount: number = getEndpointCount(params.config, params.targetUrl.host);
 
   if (endpointCount === 0) {
-    return Promise.resolve(createFailureResult(null, ERROR_NO_ENDPOINTS_AVAILABLE));
+    return Promise.resolve(createFailureResult(null, null, ERROR_NO_ENDPOINTS_AVAILABLE));
   }
 
   const maxRetries: number = calculateMaxRetries(endpointCount);

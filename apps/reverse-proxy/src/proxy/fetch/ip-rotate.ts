@@ -21,7 +21,9 @@ export const fetchViaIpRotate = async (
   });
 
   if (!result.success) {
-    return result.lastResponse ? { response: result.lastResponse, usedEndpoint: '' } : null;
+    return result.lastResponse
+      ? { response: result.lastResponse, usedEndpoint: result.lastUsedEndpoint ?? '' }
+      : null;
   }
 
   return { response: result.response, usedEndpoint: result.usedEndpoint };

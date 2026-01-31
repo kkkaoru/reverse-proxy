@@ -89,6 +89,7 @@ interface FetchWithRetryResult {
 interface FetchWithRetryFailure {
   readonly success: false;
   readonly lastResponse: Response | null;
+  readonly lastUsedEndpoint: string | null;
   readonly error: string;
 }
 

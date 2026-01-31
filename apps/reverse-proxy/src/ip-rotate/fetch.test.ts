@@ -466,3 +466,127 @@ test('fetchWithRetry propagates non-timeout errors', async () => {
     }),
   ).rejects.toThrow('Network error');
 });
+
+test('fetchWithRetry uses correct endpoint-specific API key on each retry', async () => {
+  const capturedApiKeys: string[] = [];
+
+  globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    const apiKey = headers?.['x-api-key'];
+    if (apiKey) {
+      capturedApiKeys.push(apiKey);
+    }
+    // Return error to trigger retry
+    return Promise.resolve(new Response('error', { status: 500 }));
+  });
+
+  await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'endpoint-key-1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'endpoint-key-2' },
+          { endpoint: 'https://api3.example.com', apiKey: 'endpoint-key-3' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'base-key-should-not-be-used' },
+    },
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+  });
+
+  // Should have tried all endpoints multiple times (3 endpoints * 2 = 6 retries)
+  expect(capturedApiKeys.length).toBe(6);
+
+  // Verify endpoint-specific keys are used, not the base key
+  expect(capturedApiKeys).not.toContain('base-key-should-not-be-used');
+
+  // Verify round-robin pattern uses correct endpoint-specific keys
+  expect(capturedApiKeys[0]).toBe('endpoint-key-1');
+  expect(capturedApiKeys[1]).toBe('endpoint-key-2');
+  expect(capturedApiKeys[2]).toBe('endpoint-key-3');
+  expect(capturedApiKeys[3]).toBe('endpoint-key-1');
+  expect(capturedApiKeys[4]).toBe('endpoint-key-2');
+  expect(capturedApiKeys[5]).toBe('endpoint-key-3');
+});
+
+test('fetchWithRetry correctly matches URL and API key on each request', async () => {
+  const capturedRequests: Array<{ url: string; apiKey: string }> = [];
+
+  globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    const apiKey = headers?.['x-api-key'] ?? '';
+    capturedRequests.push({ url, apiKey });
+    // Return error to trigger retry
+    return Promise.resolve(new Response('error', { status: 498 }));
+  });
+
+  await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://gateway-1.example.com', apiKey: 'key-for-gateway-1' },
+          { endpoint: 'https://gateway-2.example.com', apiKey: 'key-for-gateway-2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'base-key' },
+    },
+    targetUrl: new URL('https://example.com/test/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+  });
+
+  // Should have tried 4 times (2 endpoints * 2)
+  expect(capturedRequests.length).toBe(4);
+
+  // Verify each URL is matched with the correct API key
+  for (const req of capturedRequests) {
+    if (req.url.includes('gateway-1')) {
+      expect(req.apiKey).toBe('key-for-gateway-1');
+    } else if (req.url.includes('gateway-2')) {
+      expect(req.apiKey).toBe('key-for-gateway-2');
+    }
+  }
+
+  // Verify round-robin order
+  expect(capturedRequests[0].url).toContain('gateway-1');
+  expect(capturedRequests[0].apiKey).toBe('key-for-gateway-1');
+  expect(capturedRequests[1].url).toContain('gateway-2');
+  expect(capturedRequests[1].apiKey).toBe('key-for-gateway-2');
+  expect(capturedRequests[2].url).toContain('gateway-1');
+  expect(capturedRequests[2].apiKey).toBe('key-for-gateway-1');
+  expect(capturedRequests[3].url).toContain('gateway-2');
+  expect(capturedRequests[3].apiKey).toBe('key-for-gateway-2');
+});
+
+test('fetchWithRetry returns lastUsedEndpoint on failure', async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(new Response('error', { status: 498 }));
+
+  const result = await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://gateway-1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://gateway-2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'base-key' },
+    },
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+  });
+
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    expect(result.lastResponse).not.toBeNull();
+    expect(result.lastResponse?.status).toBe(498);
+    // lastUsedEndpoint should be set to the last endpoint that was tried
+    expect(result.lastUsedEndpoint).not.toBeNull();
+    expect(result.lastUsedEndpoint).toContain('gateway-');
+  }
+});
