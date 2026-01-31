@@ -102,3 +102,97 @@ export interface ProcessFetchResponseParams {
 // Types
 export type ParsedUrl = ParsedUrlSuccess | ParsedUrlFailure;
 export type RequestHandler = (target: string) => Promise<Response>;
+
+// SSRF validation types
+export interface SsrfValidationSuccess {
+  readonly valid: true;
+  readonly url: URL;
+}
+
+export interface SsrfValidationFailure {
+  readonly valid: false;
+  readonly reason: string;
+}
+
+export type SsrfValidationResult = SsrfValidationSuccess | SsrfValidationFailure;
+
+// Batch fetch types
+export type BatchResultStatus = 'success' | 'error' | 'ssrf_blocked' | 'timeout' | 'skipped';
+
+export interface BatchFetchResult {
+  readonly url: string;
+  readonly httpStatus: number;
+  readonly result: BatchResultStatus;
+  readonly body: string;
+}
+
+export interface BatchRequestBody {
+  readonly urls: readonly string[];
+}
+
+export interface SingleFetchParams {
+  readonly url: string;
+  readonly options: ProxyCacheOptions;
+}
+
+export interface BatchFetchParams {
+  readonly urls: readonly string[];
+  readonly options: ProxyCacheOptions;
+}
+
+export interface FetchTask {
+  readonly url: string;
+  readonly index: number;
+  readonly isRetry: boolean;
+}
+
+export interface ResourceUsage {
+  readonly memoryBytes: number;
+  readonly subrequestCount: number;
+}
+
+export interface ResourceLimits {
+  readonly maxMemoryBytes: number;
+  readonly maxSubrequests: number;
+}
+
+export type SettledResult = PromiseSettledResult<BatchFetchResult>;
+export type FulfilledResult = PromiseFulfilledResult<BatchFetchResult>;
+
+export interface ProcessBatchParams {
+  readonly tasks: readonly FetchTask[];
+  readonly options: ProxyCacheOptions;
+}
+
+export interface ProcessSettledResultParams {
+  readonly settled: SettledResult;
+  readonly task: FetchTask;
+  readonly results: (BatchFetchResult | null)[];
+  readonly retried: Set<number>;
+  readonly retryQueue: FetchTask[];
+}
+
+export interface ExecuteBatchContextParams {
+  readonly results: (BatchFetchResult | null)[];
+  readonly retried: Set<number>;
+  readonly options: ProxyCacheOptions;
+}
+
+export interface BatchExecutionState {
+  readonly limits: ResourceLimits;
+  readonly results: (BatchFetchResult | null)[];
+  readonly retried: Set<number>;
+  readonly queue: FetchTask[];
+  readonly options: ProxyCacheOptions;
+}
+
+export interface LoopIterationParams {
+  readonly state: BatchExecutionState;
+  readonly urlCount: number;
+}
+
+export interface ExecuteSingleBatchParams {
+  readonly state: BatchExecutionState;
+}
+
+export type BatchRequestHandler = (body: unknown) => Promise<Response>;

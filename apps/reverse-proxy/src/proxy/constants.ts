@@ -9,6 +9,7 @@ export const QUERY_KEY_TARGET: string = 'url';
 export const METHOD_GET: string = 'GET';
 export const METHOD_HEAD: string = 'HEAD';
 export const METHOD_DELETE: string = 'DELETE';
+export const METHOD_POST: string = 'POST';
 
 // Request options
 export const CACHE_MODE_NO_STORE: RequestCache = 'no-store';
@@ -83,3 +84,50 @@ export const LOG_EVENT_IP_ROTATE: string = 'ip-rotate';
 export const CACHE_TTL_SECONDS: number = 432000; // 5 days (86400 * 5)
 export const KV_CACHE_KEY_PREFIX: string = 'proxy';
 export const DEFAULT_CACHE_VERSION: string = 'v1';
+
+// Batch fetch
+export const MAX_CONCURRENT_REQUESTS: number = 6;
+
+// SSRF blocked hostnames
+export const BLOCKED_HOSTNAMES: readonly string[] = [
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '[::1]',
+  '[::]',
+];
+
+// SSRF blocked IP patterns (private/internal networks)
+export const BLOCKED_IP_PATTERNS: readonly RegExp[] = [
+  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+  /^192\.168\.\d{1,3}\.\d{1,3}$/,
+  /^169\.254\.\d{1,3}\.\d{1,3}$/,
+  /^fc[0-9a-f]{2}:/i,
+  /^fd[0-9a-f]{2}:/i,
+  /^fe80:/i,
+];
+
+// Allowed protocols
+export const ALLOWED_PROTOCOLS: readonly string[] = ['http:', 'https:'];
+
+// Error messages
+export const ERROR_BLOCKED_HOST: string = 'Access to this host is not allowed';
+export const ERROR_BLOCKED_PROTOCOL: string = 'Only http and https protocols are allowed';
+export const ERROR_PRIVATE_IP: string = 'Access to private IP addresses is not allowed';
+export const ERROR_INVALID_BODY: string = 'Request body must be valid JSON';
+export const ERROR_MISSING_URLS: string = 'Request body must contain "urls" array';
+export const ERROR_FETCH_FAILED: string = 'Fetch failed';
+
+// HTTP Status codes (batch)
+export const STATUS_UNPROCESSABLE_ENTITY: number = 422;
+
+// Resource limits (Cloudflare Workers Paid limits)
+export const MAX_MEMORY_BYTES: number = 100 * 1024 * 1024; // 100MB (128MB Worker limit - 28MB margin)
+export const MAX_SUBREQUESTS: number = 1000; // Workers Paid subrequest limit
+
+// Batch result statuses (typed as literal for BatchResultStatus compatibility)
+export const RESULT_SUCCESS: 'success' = 'success';
+export const RESULT_ERROR: 'error' = 'error';
+export const RESULT_SSRF_BLOCKED: 'ssrf_blocked' = 'ssrf_blocked';
+export const RESULT_SKIPPED: 'skipped' = 'skipped';

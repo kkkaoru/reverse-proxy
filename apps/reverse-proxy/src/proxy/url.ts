@@ -1,8 +1,16 @@
 // URL utilities for proxy
 // Execute with bun: wrangler dev
 
-import { ERROR_INVALID_URL } from './constants.ts';
-import type { ParsedUrl } from './types.ts';
+import {
+  ALLOWED_PROTOCOLS,
+  BLOCKED_HOSTNAMES,
+  BLOCKED_IP_PATTERNS,
+  ERROR_BLOCKED_HOST,
+  ERROR_BLOCKED_PROTOCOL,
+  ERROR_INVALID_URL,
+  ERROR_PRIVATE_IP,
+} from './constants.ts';
+import type { ParsedUrl, SsrfValidationResult } from './types.ts';
 
 // Constants
 export const FORWARD_PARAMS: readonly string[] = ['word'];
@@ -62,3 +70,42 @@ export const buildTargetUrl = (baseUrl: string, rawProxyQuery: string): string =
 // Extract raw query string from request URL
 export const extractRawQuery = (requestUrl: string): string =>
   new URL(requestUrl).search.slice(QUERY_STRING_START_INDEX);
+
+// SSRF validation functions
+export const isAllowedProtocol = (url: URL): boolean => ALLOWED_PROTOCOLS.includes(url.protocol);
+
+export const isBlockedHostname = (hostname: string): boolean =>
+  BLOCKED_HOSTNAMES.includes(hostname.toLowerCase());
+
+// Strip brackets from IPv6 addresses for pattern matching
+const stripIpv6Brackets = (hostname: string): string =>
+  hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+
+export const isPrivateIp = (hostname: string): boolean => {
+  const bareHostname: string = stripIpv6Brackets(hostname);
+  return BLOCKED_IP_PATTERNS.some((pattern: RegExp): boolean => pattern.test(bareHostname));
+};
+
+export const validateUrlWithSsrf = (raw: string): SsrfValidationResult => {
+  const parsed: ParsedUrl = parseTargetUrl(raw);
+
+  if (!parsed.success) {
+    return { valid: false, reason: parsed.message };
+  }
+
+  const url: URL = parsed.value;
+
+  if (!isAllowedProtocol(url)) {
+    return { valid: false, reason: ERROR_BLOCKED_PROTOCOL };
+  }
+
+  if (isBlockedHostname(url.hostname)) {
+    return { valid: false, reason: ERROR_BLOCKED_HOST };
+  }
+
+  if (isPrivateIp(url.hostname)) {
+    return { valid: false, reason: ERROR_PRIVATE_IP };
+  }
+
+  return { valid: true, url };
+};
