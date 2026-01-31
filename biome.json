@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.2.5/schema.json",
   "files": {
-    "includes": ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
+    "includes": ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts", "!**/.wrangler", "!**/temp"]
   },
   "formatter": {
     "enabled": true,
@@ -205,6 +205,8 @@
         "apps/reverse-proxy/tests/proxy.middleware.test.ts",
         "apps/reverse-proxy/tests/playwright.test.ts",
         "apps/reverse-proxy/tests/proxy.url.test.ts",
+        "apps/reverse-proxy/tests/proxy.url-ssrf.test.ts",
+        "apps/reverse-proxy/tests/proxy.batch.test.ts",
         "apps/reverse-proxy/tests/proxy.errors.test.ts",
         "apps/reverse-proxy/tests/proxy.options.test.ts"
       ],
@@ -249,8 +251,10 @@
       }
     },
     {
-      "includes": ["apps/reverse-proxy/src/ip-rotate/*.test.ts",
-        "apps/reverse-proxy/src/proxy/fetch.test.ts"
+      "includes": [
+        "apps/reverse-proxy/src/ip-rotate/*.test.ts",
+        "apps/reverse-proxy/src/proxy/*.test.ts",
+        "apps/reverse-proxy/src/proxy/**/*.test.ts"
       ],
       "linter": {
         "rules": {
