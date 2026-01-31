@@ -8,11 +8,12 @@ import {
   HTTP_STATUS_NOT_FOUND,
 } from '../constants/index.ts';
 import { findSignInUserByDomainAndUserId } from '../repositories/sign-in-users.ts';
-import { getCachedHtml, setCachedHtml } from '../services/cache.ts';
+import { deleteCachedHtml, getCachedHtml, setCachedHtml } from '../services/cache.ts';
 import { fetchPageWithSignIn } from '../services/signin.ts';
 import type { WorkerBindings } from '../types/index.ts';
 import { extractDomain } from '../utils/domain.ts';
-import { errorResponse, htmlResponse } from '../utils/response.ts';
+import { errorResponse, htmlResponse, successResponse } from '../utils/response.ts';
+import { buildStorageStateKey } from '../utils/storage-state.ts';
 
 interface PlaywrightQueryParams {
   url: string;
@@ -117,6 +118,47 @@ export const playwrightHandler = async (
 
   await setCachedHtml({ url: params.url, userId: params.userId }, result.html);
   return htmlResponse(c, result.html);
+};
+
+export const playwrightDeleteHandler = async (
+  c: Context<{ Bindings: WorkerBindings }>,
+): Promise<Response> => {
+  const paramsResult: PlaywrightQueryParams | null = getQueryParams(c);
+  if (!paramsResult) {
+    return errorResponse({
+      c,
+      error: 'Bad Request',
+      message: 'Missing required parameters: url and user_id',
+      statusCode: HTTP_STATUS_BAD_REQUEST,
+    });
+  }
+
+  const domain = extractDomain(paramsResult.url);
+  const deletedCache = await deleteCachedHtml({
+    url: paramsResult.url,
+    userId: paramsResult.userId,
+  });
+
+  // Also delete storage state from KV
+  const deletedKv = domain !== '';
+  if (deletedKv) {
+    const storageStateKey = buildStorageStateKey(domain, paramsResult.userId);
+    await c.env.KV.delete(storageStateKey);
+  }
+
+  if (deletedCache || deletedKv) {
+    return successResponse(
+      c,
+      `Deleted: cache=${deletedCache ? 'yes' : 'no'}, kv=${deletedKv ? 'yes' : 'no'}`,
+    );
+  }
+
+  return errorResponse({
+    c,
+    error: 'Not Found',
+    message: 'No cached data found for the given URL and user ID',
+    statusCode: HTTP_STATUS_NOT_FOUND,
+  });
 };
 
 export const getQueryParamsForTest = (

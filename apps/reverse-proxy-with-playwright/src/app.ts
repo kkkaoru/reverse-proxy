@@ -11,7 +11,7 @@ import {
 } from './constants/index.ts';
 import { authMiddleware } from './middleware/auth.ts';
 import { handleHealthcheck } from './routes/healthcheck.ts';
-import { playwrightHandler } from './routes/playwright.ts';
+import { playwrightDeleteHandler, playwrightHandler } from './routes/playwright.ts';
 import { playwrightSignInHandler } from './routes/playwright-signin.ts';
 import type { WorkerBindings } from './types/index.ts';
 
@@ -24,6 +24,7 @@ app.get(PLAYWRIGHT_HEALTHCHECK_PATH, handleHealthcheck);
 
 // Playwright routes (auth required)
 app.get(PLAYWRIGHT_PATH, authMiddleware, playwrightHandler);
+app.delete(PLAYWRIGHT_PATH, authMiddleware, playwrightDeleteHandler);
 app.get(PLAYWRIGHT_SIGNIN_PATH, authMiddleware, playwrightSignInHandler);
 
 export type AppType = typeof app;
