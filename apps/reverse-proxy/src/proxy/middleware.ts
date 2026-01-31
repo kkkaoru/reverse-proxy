@@ -22,6 +22,15 @@ import type {
   RequestHandler,
 } from './types.ts';
 
+// Constants
+const FORWARD_PARAMS: readonly string[] = ['word'];
+const QUERY_STRING_START_INDEX: number = 1;
+const QUERY_SEPARATOR_INITIAL: string = '?';
+const QUERY_SEPARATOR_APPEND: string = '&';
+
+// Module-level counter for IP rotation round-robin
+const ipRotateCounters: Map<string, number> = new Map();
+
 // Parse IP rotation config from environment
 const parseIpRotateConfigFromEnv = (env: ProxyCacheEnv): IpRotateConfig | undefined => {
   const parsed: ParsedConfig = parseIpRotateConfig({
@@ -40,17 +49,58 @@ const parseIpRotateConfigFromEnv = (env: ProxyCacheEnv): IpRotateConfig | undefi
 const createOptionsFromEnv = (
   staticOptions: ProxyCacheStaticOptions,
   env: ProxyCacheEnv,
-  ipRotateCounters: Map<string, number>,
+  counters: Map<string, number>,
 ): ProxyCacheOptions => ({
   enableLogging: staticOptions.enableLogging,
   kv: env.KV,
   cacheVersion: env.CACHE_VERSION ?? DEFAULT_CACHE_VERSION,
   ipRotateConfig: parseIpRotateConfigFromEnv(env),
-  ipRotateCounters,
+  ipRotateCounters: counters,
 });
 
-// Module-level counter for IP rotation round-robin
-const ipRotateCounters: Map<string, number> = new Map();
+// Extract raw parameter value from query string (preserves original encoding like EUC-JP)
+const extractRawParamValue = (rawQuery: string, paramName: string): string | undefined => {
+  const pattern: RegExp = new RegExp(`(?:^|&)${paramName}=([^&]*)`, 'i');
+  const match: RegExpMatchArray | null = rawQuery.match(pattern);
+  return match?.[1];
+};
+
+// Check if URL already has the specified parameter
+const urlHasParam = (url: string, param: string): boolean => {
+  try {
+    return new URL(url).searchParams.has(param);
+  } catch {
+    return true; // Treat invalid URLs as having the param to skip appending
+  }
+};
+
+// Get query separator based on whether URL already has query string
+const getQuerySeparator = (url: string): string =>
+  url.includes(QUERY_SEPARATOR_INITIAL) ? QUERY_SEPARATOR_APPEND : QUERY_SEPARATOR_INITIAL;
+
+// Append single parameter to URL if conditions are met
+const appendParamIfNeeded = (url: string, rawQuery: string, param: string): string => {
+  const rawValue: string | undefined = extractRawParamValue(rawQuery, param);
+  if (rawValue === undefined) {
+    return url;
+  }
+  if (urlHasParam(url, param)) {
+    return url;
+  }
+  const separator: string = getQuerySeparator(url);
+  return `${url}${separator}${param}=${rawValue}`;
+};
+
+// Build target URL by appending forwarded parameters from proxy request
+const buildTargetUrl = (baseUrl: string, rawProxyQuery: string): string =>
+  FORWARD_PARAMS.reduce(
+    (url: string, param: string): string => appendParamIfNeeded(url, rawProxyQuery, param),
+    baseUrl,
+  );
+
+// Extract raw query string from request URL
+const extractRawQuery = (requestUrl: string): string =>
+  new URL(requestUrl).search.slice(QUERY_STRING_START_INDEX);
 
 // Create proxy cache middleware
 export const createProxyCacheMiddleware = (
@@ -71,12 +121,15 @@ export const createProxyCacheMiddleware = (
       return;
     }
 
-    const target: string | undefined = c.req.query(QUERY_KEY_TARGET);
+    const baseTarget: string | undefined = c.req.query(QUERY_KEY_TARGET);
 
-    if (!target) {
+    if (!baseTarget) {
       logEvent(options, LOG_EVENT_MISSING_QUERY, { method: c.req.method });
       return createErrorResponse(ERROR_MISSING_URL, STATUS_BAD_REQUEST);
     }
+
+    const rawProxyQuery: string = extractRawQuery(c.req.url);
+    const target: string = buildTargetUrl(baseTarget, rawProxyQuery);
 
     return handler(target);
   });
