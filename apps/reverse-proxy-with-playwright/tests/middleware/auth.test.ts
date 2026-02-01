@@ -45,17 +45,14 @@ describe('extractBearerTokenForTest', () => {
 });
 
 describe('buildSignatureMessageForTest', () => {
-  it('should build message with url and userId', () => {
-    const result = buildSignatureMessageForTest('https://example.com/page', 'user@example.com');
-    expect(result).toBe('https://example.com/page::user@example.com');
+  it('should build message with domain and userId', () => {
+    const result = buildSignatureMessageForTest('example.com', 'user@example.com');
+    expect(result).toBe('example.com::user@example.com');
   });
 
-  it('should handle special characters', () => {
-    const result = buildSignatureMessageForTest(
-      'https://example.com/page?id=123',
-      'user+alias@example.com',
-    );
-    expect(result).toBe('https://example.com/page?id=123::user+alias@example.com');
+  it('should handle special characters in userId', () => {
+    const result = buildSignatureMessageForTest('example.com', 'user+alias@example.com');
+    expect(result).toBe('example.com::user+alias@example.com');
   });
 });
 
@@ -125,7 +122,7 @@ describe('verifyBearerToken', () => {
     };
     insertRow('secret_keys', secretKeyRow);
 
-    const message = 'https://example.com/page::user@example.com';
+    const message = 'example.com::user@example.com';
     const signature = await signEd25519Message(message, TEST_SECRET_KEY_BASE64);
 
     const mockContext = {
@@ -239,7 +236,7 @@ describe('authMiddleware', () => {
     };
     insertRow('secret_keys', secretKeyRow);
 
-    const message = 'https://example.com/page::user@example.com';
+    const message = 'example.com::user@example.com';
     const signature = await signEd25519Message(message, TEST_SECRET_KEY_BASE64);
 
     const mockContext = {
