@@ -1,12 +1,7 @@
-// Cache service for HTML caching using Cache API
+// Cache service for HTML caching using KV
 // Execute with bun: wrangler dev
 
-import {
-  CACHE_MAX_AGE_SECONDS,
-  DATE_MONTH_OFFSET,
-  DATE_PAD_CHAR,
-  DATE_PAD_LENGTH,
-} from '../constants/index.ts';
+import { DATE_MONTH_OFFSET, DATE_PAD_CHAR, DATE_PAD_LENGTH } from '../constants/index.ts';
 
 interface CacheKeyParams {
   url: string;
@@ -23,9 +18,6 @@ interface RawCacheData {
   cachedAt?: unknown;
 }
 
-const CACHE_NAME = 'html-cache';
-const CACHE_INTERNAL_URL_PREFIX = 'https://cache.internal/';
-
 const formatDateKey = (date: Date): string => {
   const year: number = date.getUTCFullYear();
   const month: string = String(date.getUTCMonth() + DATE_MONTH_OFFSET).padStart(
@@ -39,61 +31,64 @@ const formatDateKey = (date: Date): string => {
 const buildCacheKey = (params: CacheKeyParams, dateKey: string): string =>
   `html::${params.url}::${params.userId}::${dateKey}`;
 
-const buildCacheUrl = (cacheKey: string): string =>
-  `${CACHE_INTERNAL_URL_PREFIX}${encodeURIComponent(cacheKey)}`;
-
 const isCacheResponse = (data: RawCacheData): data is CacheResponse =>
   typeof data.html === 'string' && typeof data.cachedAt === 'string';
 
-export const getCachedHtml = async (params: CacheKeyParams): Promise<CacheResponse | null> => {
+export const getCachedHtml = async (
+  kv: KVNamespace,
+  params: CacheKeyParams,
+): Promise<CacheResponse | null> => {
   const dateKey: string = formatDateKey(new Date());
   const cacheKey: string = buildCacheKey(params, dateKey);
-  const cacheUrl: string = buildCacheUrl(cacheKey);
 
-  const cache: Cache = await caches.open(CACHE_NAME);
-  const cachedResponse: Response | undefined = await cache.match(cacheUrl);
+  const cachedJson: string | null = await kv.get(cacheKey);
 
-  if (!cachedResponse) {
+  if (!cachedJson) {
     return null;
   }
 
-  const data: RawCacheData = await cachedResponse.json();
+  try {
+    const data: RawCacheData = JSON.parse(cachedJson);
 
-  if (!isCacheResponse(data)) {
+    if (!isCacheResponse(data)) {
+      return null;
+    }
+
+    return data;
+  } catch {
     return null;
   }
-
-  return data;
 };
 
-export const setCachedHtml = async (params: CacheKeyParams, html: string): Promise<void> => {
+export const setCachedHtml = async (
+  kv: KVNamespace,
+  params: CacheKeyParams,
+  html: string,
+): Promise<void> => {
   const dateKey: string = formatDateKey(new Date());
   const cacheKey: string = buildCacheKey(params, dateKey);
-  const cacheUrl: string = buildCacheUrl(cacheKey);
 
   const cacheData: CacheResponse = {
     html,
     cachedAt: new Date().toISOString(),
   };
 
-  const response: Response = new Response(JSON.stringify(cacheData), {
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': `max-age=${CACHE_MAX_AGE_SECONDS}`,
-    },
-  });
-
-  const cache: Cache = await caches.open(CACHE_NAME);
-  await cache.put(cacheUrl, response);
+  await kv.put(cacheKey, JSON.stringify(cacheData));
 };
 
-export const deleteCachedHtml = async (params: CacheKeyParams): Promise<boolean> => {
+export const deleteCachedHtml = async (
+  kv: KVNamespace,
+  params: CacheKeyParams,
+): Promise<boolean> => {
   const dateKey: string = formatDateKey(new Date());
   const cacheKey: string = buildCacheKey(params, dateKey);
-  const cacheUrl: string = buildCacheUrl(cacheKey);
 
-  const cache: Cache = await caches.open(CACHE_NAME);
-  return cache.delete(cacheUrl);
+  const existing: string | null = await kv.get(cacheKey);
+  if (existing) {
+    await kv.delete(cacheKey);
+    return true;
+  }
+  return false;
 };
 
 export const buildCacheKeyForTest = (params: CacheKeyParams, dateKey: string): string =>
