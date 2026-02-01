@@ -2,12 +2,7 @@
 // Execute with bun: wrangler dev
 
 import { convertResponseToUtf8 } from '../../../utils/encoding.ts';
-import {
-  createKvCacheKey,
-  logEvent,
-  setKvCachedContent,
-  tryGetKvCache,
-} from '../../cache.ts';
+import { createKvCacheKey, logEvent, setKvCachedContent, tryGetKvCache } from '../../cache.ts';
 import {
   ERROR_FETCH_FAILED,
   HEADER_CONTENT_TYPE,
@@ -57,26 +52,28 @@ const tryGetCachedResult = async (
   };
 };
 
+interface StoreInKvCacheParams {
+  url: string;
+  body: string;
+  contentType: string;
+  options: ProxyCacheOptions;
+}
+
 // Store successful response in KV cache
-const storeInKvCacheForBatch = async (
-  url: string,
-  body: string,
-  contentType: string,
-  options: ProxyCacheOptions,
-): Promise<void> => {
-  if (!options.kv) {
+const storeInKvCacheForBatch = async (params: StoreInKvCacheParams): Promise<void> => {
+  if (!params.options.kv) {
     return;
   }
 
-  const kvCacheKey: string = createKvCacheKey(url, options.cacheVersion);
+  const kvCacheKey: string = createKvCacheKey(params.url, params.options.cacheVersion);
 
   await setKvCachedContent({
-    kv: options.kv,
+    kv: params.options.kv,
     cacheKey: kvCacheKey,
-    data: { content: body, contentType },
+    data: { content: params.body, contentType: params.contentType },
   });
 
-  logEvent(options, LOG_EVENT_KV_CACHE_SET, { target: url, cacheKey: kvCacheKey });
+  logEvent(params.options, LOG_EVENT_KV_CACHE_SET, { target: params.url, cacheKey: kvCacheKey });
 };
 
 // Fetch single URL with SSRF validation and caching
@@ -114,7 +111,7 @@ export const fetchSingleUrl = async (params: SingleFetchParams): Promise<BatchFe
 
     // Store in KV cache if response is cacheable
     if (isCacheableStatus(response.status)) {
-      await storeInKvCacheForBatch(params.url, body, contentType, params.options);
+      await storeInKvCacheForBatch({ url: params.url, body, contentType, options: params.options });
     }
 
     return { url: params.url, httpStatus: response.status, result, body };
