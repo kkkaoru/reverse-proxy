@@ -13,13 +13,7 @@ vi.mock('../../src/services/browser-launcher.ts', () => ({
 import { getQueryParamsForTest, playwrightHandler } from '../../src/routes/playwright.ts';
 import { launchBrowser } from '../../src/services/browser-launcher.ts';
 import type { WorkerBindings } from '../../src/types/index.ts';
-import {
-  createCacheStorage,
-  createInMemoryD1Database,
-  createMemoryCache,
-  createMockKVNamespace,
-  type InMemoryD1Row,
-} from '../helpers.ts';
+import { createInMemoryD1Database, createMockKVNamespace, type InMemoryD1Row } from '../helpers.ts';
 
 interface MockStorageState {
   cookies: never[];
@@ -115,12 +109,12 @@ describe('getQueryParamsForTest', () => {
   });
 });
 
-describe('playwrightHandler', () => {
+describe('playwrightHandler - parameter validation', () => {
   it('should return 400 when params are missing', async () => {
+    const kv = createMockKVNamespace();
     const mockContext = {
-      req: {
-        query: vi.fn().mockReturnValue(undefined),
-      },
+      env: { KV: kv },
+      req: { query: vi.fn().mockReturnValue(undefined) },
       json: vi.fn((data, status) => new Response(JSON.stringify(data), { status })),
     } as unknown as Context<{ Bindings: WorkerBindings }>;
 
@@ -128,49 +122,10 @@ describe('playwrightHandler', () => {
     expect(response.status).toBe(400);
   });
 
-  it('should return cached html when available', async () => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
-
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
-
-    const htmlCache = await caches.open('html-cache');
-    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
-    const cacheUrl = `https://cache.internal/${encodeURIComponent(cacheKey)}`;
-    await htmlCache.put(
-      cacheUrl,
-      Response.json({
-        html: '<html>Cached</html>',
-        cachedAt: '2024-01-15T09:00:00.000Z',
-      }),
-    );
-
-    const mockContext = {
-      req: {
-        query: vi.fn((key: string) => {
-          if (key === 'url') return encodeURIComponent('https://example.com/page');
-          if (key === 'user_id') return encodeURIComponent('user@example.com');
-          return undefined;
-        }),
-      },
-      html: vi.fn((html, status) => new Response(html, { status })),
-    } as unknown as Context<{ Bindings: WorkerBindings }>;
-
-    const response = await playwrightHandler(mockContext);
-    expect(response.status).toBe(200);
-
-    const body = await response.text();
-    expect(body).toBe('<html>Cached</html>');
-
-    vi.useRealTimers();
-  });
-
   it('should return 400 for invalid URL', async () => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
-
+    const kv = createMockKVNamespace();
     const mockContext = {
+      env: { KV: kv },
       req: {
         query: vi.fn((key: string) => {
           if (key === 'url') return encodeURIComponent('not-a-valid-url');
@@ -186,12 +141,10 @@ describe('playwrightHandler', () => {
   });
 
   it('should return 404 when sign-in user not found', async () => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
     const { db } = createInMemoryD1Database();
-
+    const kv = createMockKVNamespace();
     const mockContext = {
-      env: { DB: db },
+      env: { DB: db, KV: kv },
       req: {
         query: vi.fn((key: string) => {
           if (key === 'url') return encodeURIComponent('https://example.com/page');
@@ -205,12 +158,43 @@ describe('playwrightHandler', () => {
     const response = await playwrightHandler(mockContext);
     expect(response.status).toBe(404);
   });
+});
 
-  it('should fetch page when user exists', async () => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
+describe('playwrightHandler - caching', () => {
+  it('should return cached html when available in KV', async () => {
+    const kv = createMockKVNamespace();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
+
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+    await kv.put(
+      cacheKey,
+      JSON.stringify({ html: '<html>Cached</html>', cachedAt: '2024-01-15T09:00:00.000Z' }),
+    );
+
+    const mockContext = {
+      env: { KV: kv },
+      req: {
+        query: vi.fn((key: string) => {
+          if (key === 'url') return encodeURIComponent('https://example.com/page');
+          if (key === 'user_id') return encodeURIComponent('user@example.com');
+          return undefined;
+        }),
+      },
+      html: vi.fn((html, status) => new Response(html, { status })),
+    } as unknown as Context<{ Bindings: WorkerBindings }>;
+
+    const response = await playwrightHandler(mockContext);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('<html>Cached</html>');
+    vi.useRealTimers();
+  });
+
+  it('should fetch page when user exists and cache in KV', async () => {
     const { db, insertRow } = createInMemoryD1Database();
     const kv = createMockKVNamespace();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
 
     const userRow: InMemoryD1Row = {
       id: 'user-1',
@@ -228,12 +212,7 @@ describe('playwrightHandler', () => {
     vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
 
     const mockContext = {
-      env: {
-        DB: db,
-        KV: kv,
-        BROWSER: browser as unknown as Browser,
-        PEPPER: 'test-pepper',
-      },
+      env: { DB: db, KV: kv, BROWSER: browser as unknown as Browser, PEPPER: 'test-pepper' },
       req: {
         query: vi.fn((key: string) => {
           if (key === 'url') return encodeURIComponent('https://example.com/page');
@@ -247,5 +226,13 @@ describe('playwrightHandler', () => {
 
     const response = await playwrightHandler(mockContext);
     expect(response.status).toBe(200);
+
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+    const cached = await kv.get(cacheKey);
+    expect(cached).not.toBeNull();
+    if (cached === null) throw new Error('cached should not be null');
+    const cachedData = JSON.parse(cached) as { html: string; cachedAt: string };
+    expect(cachedData.html).toBe('<html>Fresh content</html>');
+    vi.useRealTimers();
   });
 });
