@@ -76,7 +76,10 @@ export const playwrightHandler = async (
     });
   }
 
-  const cachedData = await getCachedHtml({ url: paramsResult.url, userId: paramsResult.userId });
+  const cachedData = await getCachedHtml(c.env.KV, {
+    url: paramsResult.url,
+    userId: paramsResult.userId,
+  });
   if (cachedData) {
     return htmlResponse(c, cachedData.html);
   }
@@ -116,7 +119,7 @@ export const playwrightHandler = async (
     });
   }
 
-  await setCachedHtml({ url: params.url, userId: params.userId }, result.html);
+  await setCachedHtml(c.env.KV, { url: params.url, userId: params.userId }, result.html);
   return htmlResponse(c, result.html);
 };
 
@@ -134,7 +137,7 @@ export const playwrightDeleteHandler = async (
   }
 
   const domain = extractDomain(paramsResult.url);
-  const deletedCache = await deleteCachedHtml({
+  const deletedCache = await deleteCachedHtml(c.env.KV, {
     url: paramsResult.url,
     userId: paramsResult.userId,
   });
