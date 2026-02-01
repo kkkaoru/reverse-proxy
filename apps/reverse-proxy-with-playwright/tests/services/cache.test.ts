@@ -1,4 +1,4 @@
-// Tests for cache service
+// Tests for cache service using KV
 // Execute with bun: bunx vitest run
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import {
   getCachedHtml,
   setCachedHtml,
 } from '../../src/services/cache.ts';
-import { createCacheStorage, createMemoryCache } from '../helpers.ts';
+import { createMockKVNamespace } from '../helpers.ts';
 
 describe('formatDateKeyForTest', () => {
   it('should format date as yyyy-mm-dd', () => {
@@ -70,8 +70,6 @@ describe('buildCacheKeyForTest', () => {
 
 describe('getCachedHtml', () => {
   beforeEach(() => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
   });
@@ -81,7 +79,8 @@ describe('getCachedHtml', () => {
   });
 
   it('should return null when no cached data exists', async () => {
-    const result = await getCachedHtml({
+    const kv = createMockKVNamespace();
+    const result = await getCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
@@ -89,18 +88,17 @@ describe('getCachedHtml', () => {
   });
 
   it('should return cached data when it exists', async () => {
-    const cache = await caches.open('html-cache');
+    const kv = createMockKVNamespace();
     const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
-    const cacheUrl = `https://cache.internal/${encodeURIComponent(cacheKey)}`;
 
     const cacheData = {
       html: '<html><body>Cached content</body></html>',
       cachedAt: '2024-01-15T09:00:00.000Z',
     };
 
-    await cache.put(cacheUrl, Response.json(cacheData));
+    await kv.put(cacheKey, JSON.stringify(cacheData));
 
-    const result = await getCachedHtml({
+    const result = await getCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
@@ -110,12 +108,38 @@ describe('getCachedHtml', () => {
       cachedAt: '2024-01-15T09:00:00.000Z',
     });
   });
+
+  it('should return null when cached data is invalid JSON', async () => {
+    const kv = createMockKVNamespace();
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+
+    await kv.put(cacheKey, 'invalid json');
+
+    const result = await getCachedHtml(kv, {
+      url: 'https://example.com/page',
+      userId: 'user@example.com',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null when cached data has wrong structure', async () => {
+    const kv = createMockKVNamespace();
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+
+    await kv.put(cacheKey, JSON.stringify({ wrongField: 'value' }));
+
+    const result = await getCachedHtml(kv, {
+      url: 'https://example.com/page',
+      userId: 'user@example.com',
+    });
+
+    expect(result).toBeNull();
+  });
 });
 
 describe('setCachedHtml', () => {
   beforeEach(() => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
   });
@@ -124,8 +148,11 @@ describe('setCachedHtml', () => {
     vi.useRealTimers();
   });
 
-  it('should store html in cache', async () => {
+  it('should store html in KV', async () => {
+    const kv = createMockKVNamespace();
+
     await setCachedHtml(
+      kv,
       {
         url: 'https://example.com/page',
         userId: 'user@example.com',
@@ -133,20 +160,23 @@ describe('setCachedHtml', () => {
       '<html><body>New content</body></html>',
     );
 
-    const cache = await caches.open('html-cache');
     const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
-    const cacheUrl = `https://cache.internal/${encodeURIComponent(cacheKey)}`;
+    const cached = await kv.get(cacheKey);
+    expect(cached).not.toBeNull();
 
-    const cached = await cache.match(cacheUrl);
-    expect(cached).not.toBeUndefined();
-
-    const data = (await cached?.json()) as { html: string; cachedAt: string };
+    if (cached === null) {
+      throw new Error('cached should not be null');
+    }
+    const data = JSON.parse(cached) as { html: string; cachedAt: string };
     expect(data.html).toBe('<html><body>New content</body></html>');
     expect(data.cachedAt).toBe('2024-01-15T10:00:00.000Z');
   });
 
   it('should overwrite existing cache', async () => {
+    const kv = createMockKVNamespace();
+
     await setCachedHtml(
+      kv,
       {
         url: 'https://example.com/page',
         userId: 'user@example.com',
@@ -155,6 +185,7 @@ describe('setCachedHtml', () => {
     );
 
     await setCachedHtml(
+      kv,
       {
         url: 'https://example.com/page',
         userId: 'user@example.com',
@@ -162,7 +193,7 @@ describe('setCachedHtml', () => {
       '<html><body>Second content</body></html>',
     );
 
-    const result = await getCachedHtml({
+    const result = await getCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
@@ -173,8 +204,6 @@ describe('setCachedHtml', () => {
 
 describe('deleteCachedHtml', () => {
   beforeEach(() => {
-    const cache = createMemoryCache();
-    globalThis.caches = createCacheStorage(cache);
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
   });
@@ -184,7 +213,8 @@ describe('deleteCachedHtml', () => {
   });
 
   it('should return false when no cached data exists', async () => {
-    const result = await deleteCachedHtml({
+    const kv = createMockKVNamespace();
+    const result = await deleteCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
@@ -192,7 +222,10 @@ describe('deleteCachedHtml', () => {
   });
 
   it('should delete cached data and return true', async () => {
+    const kv = createMockKVNamespace();
+
     await setCachedHtml(
+      kv,
       {
         url: 'https://example.com/page',
         userId: 'user@example.com',
@@ -200,19 +233,19 @@ describe('deleteCachedHtml', () => {
       '<html><body>Content to delete</body></html>',
     );
 
-    const beforeDelete = await getCachedHtml({
+    const beforeDelete = await getCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
     expect(beforeDelete).not.toBeNull();
 
-    const result = await deleteCachedHtml({
+    const result = await deleteCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
     expect(result).toBe(true);
 
-    const afterDelete = await getCachedHtml({
+    const afterDelete = await getCachedHtml(kv, {
       url: 'https://example.com/page',
       userId: 'user@example.com',
     });
