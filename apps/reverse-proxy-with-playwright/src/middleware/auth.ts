@@ -34,7 +34,7 @@ const extractBearerToken = (authHeader: string | undefined): string | null => {
   return parts[BEARER_TOKEN_INDEX] ?? null;
 };
 
-const buildSignatureMessage = (url: string, userId: string): string => `${url}::${userId}`;
+const buildSignatureMessage = (domain: string, userId: string): string => `${domain}::${userId}`;
 
 export const verifyBearerToken = async (
   c: Context<{ Bindings: WorkerBindings }>,
@@ -57,7 +57,7 @@ export const verifyBearerToken = async (
     return { verified: false, domain, url, userId };
   }
 
-  const message: string = buildSignatureMessage(url, userId);
+  const message: string = buildSignatureMessage(domain, userId);
   const isValid: boolean = await verifyEd25519Signature({
     message,
     signature: token,
@@ -103,5 +103,5 @@ export const authMiddleware = async (
 export const extractBearerTokenForTest = (authHeader: string | undefined): string | null =>
   extractBearerToken(authHeader);
 
-export const buildSignatureMessageForTest = (url: string, userId: string): string =>
-  buildSignatureMessage(url, userId);
+export const buildSignatureMessageForTest = (domain: string, userId: string): string =>
+  buildSignatureMessage(domain, userId);
