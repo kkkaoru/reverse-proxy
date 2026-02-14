@@ -26,5 +26,6 @@
 		"noUnusedParameters": false,
 		"noPropertyAccessFromIndexSignature": false,
 		"types": ["@cloudflare/workers-types", "vitest/importMeta"]
-	}
+	},
+	"exclude": ["apps/ip-rotate", "node_modules"]
 }
