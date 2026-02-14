@@ -38,3 +38,10 @@ CACHE_VERSION="v5"
 # IP_ROTATE_AWS_ACCESS_KEY_ID=""
 # IP_ROTATE_AWS_SECRET_ACCESS_KEY=""
 # IP_ROTATE_AWS_REGION=""
+
+# Banned regions for IP rotation (comma-separated).
+# Endpoints in these regions will be excluded from rotation.
+# IP_ROTATE_BANNED_REGIONS="eu-west-1,eu-west-2,eu-west-3,eu-central-1,eu-north-1"
+
+# Default fetch timeout in milliseconds (optional, default: 2000).
+# DEFAULT_TIMEOUT_MS="3000"
