@@ -10,12 +10,16 @@ import type {
   IpRotateEndpoints,
   ParseConfigParams,
   ParsedConfig,
+  RegionAwareEndpointResult,
   RewriteUrlResult,
+  SelectRegionAwareEndpointParams,
 } from './types.ts';
 
 // Constants at top
 const AUTH_TYPE_API_KEY = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
+const KV_KEY_IP_ROTATE_ENDPOINTS = 'ip-rotate-endpoints';
+const REGION_EXTRACT_PATTERN = /\.execute-api\.([^.]+)\.amazonaws\.com/;
 const ERROR_MISSING_ENDPOINTS = 'IP_ROTATE_ENDPOINTS is required';
 const ERROR_INVALID_ENDPOINTS_JSON = 'IP_ROTATE_ENDPOINTS must be valid JSON';
 const ERROR_MISSING_API_KEY = 'IP_ROTATE_API_KEY is required for api-key auth';
@@ -114,6 +118,82 @@ const rewriteUrlForIpRotate = (
   return { success: true, url: rewrittenUrl, apiKey: endpointResult.apiKey };
 };
 
+const extractRegionFromEndpoint = (endpoint: string): string | null => {
+  const match: RegExpMatchArray | null = endpoint.match(REGION_EXTRACT_PATTERN);
+  return match?.[1] ?? null;
+};
+
+const pickRandomElement = <T>(items: readonly T[]): T | undefined =>
+  items.length === 0 ? undefined : items[Math.floor(Math.random() * items.length)];
+
+const findEndpointInUntriedRegion = (
+  params: SelectRegionAwareEndpointParams,
+): RegionAwareEndpointResult | null => {
+  const candidates: readonly { endpoint: EndpointWithApiKey; index: number }[] = params.endpoints
+    .map((ep: EndpointWithApiKey, i: number) => ({ endpoint: ep, index: i }))
+    .filter(({ endpoint, index }: { endpoint: EndpointWithApiKey; index: number }): boolean => {
+      if (params.triedEndpointIndices.has(index)) return false;
+      const region: string | null = extractRegionFromEndpoint(endpoint.endpoint);
+      return region !== null && !params.triedRegions.has(region);
+    });
+  const found: { endpoint: EndpointWithApiKey; index: number } | undefined =
+    pickRandomElement(candidates);
+  if (!found) return null;
+  const region: string | null = extractRegionFromEndpoint(found.endpoint.endpoint);
+  return { endpoint: found.endpoint, region: region ?? '', index: found.index };
+};
+
+const findAnyUntriedEndpoint = (
+  params: SelectRegionAwareEndpointParams,
+): RegionAwareEndpointResult | null => {
+  const candidates: readonly { endpoint: EndpointWithApiKey; index: number }[] = params.endpoints
+    .map((ep: EndpointWithApiKey, i: number) => ({ endpoint: ep, index: i }))
+    .filter(
+      ({ index }: { endpoint: EndpointWithApiKey; index: number }): boolean =>
+        !params.triedEndpointIndices.has(index),
+    );
+  const found: { endpoint: EndpointWithApiKey; index: number } | undefined =
+    pickRandomElement(candidates);
+  if (!found) return null;
+  const region: string | null = extractRegionFromEndpoint(found.endpoint.endpoint);
+  return { endpoint: found.endpoint, region: region ?? '', index: found.index };
+};
+
+const selectRegionAwareEndpoint = (
+  params: SelectRegionAwareEndpointParams,
+): RegionAwareEndpointResult | null =>
+  findEndpointInUntriedRegion(params) ?? findAnyUntriedEndpoint(params);
+
+const parseBannedRegions = (envValue: string | undefined): ReadonlySet<string> => {
+  if (!envValue) return new Set();
+  return new Set(
+    envValue
+      .split(',')
+      .map((r: string) => r.trim())
+      .filter(Boolean),
+  );
+};
+
+const filterEndpointsForDomain = (
+  eps: readonly EndpointWithApiKey[],
+  bannedRegions: ReadonlySet<string>,
+): readonly EndpointWithApiKey[] =>
+  eps.filter((ep: EndpointWithApiKey) => {
+    const region: string | null = extractRegionFromEndpoint(ep.endpoint);
+    return region === null || !bannedRegions.has(region);
+  });
+
+const filterEndpointsByBannedRegions = (
+  endpoints: IpRotateEndpoints,
+  bannedRegions: ReadonlySet<string>,
+): IpRotateEndpoints =>
+  Object.fromEntries(
+    Object.entries(endpoints).map(([domain, eps]: [string, readonly EndpointWithApiKey[]]) => [
+      domain,
+      filterEndpointsForDomain(eps, bannedRegions),
+    ]),
+  );
+
 const parseEndpointsJson = (json: string): IpRotateEndpoints | null => {
   try {
     return JSON.parse(json);
@@ -184,12 +264,26 @@ const parseIpRotateConfig = (params: ParseConfigParams): ParsedConfig => {
     : parseApiKeyConfig(params, endpoints);
 };
 
+const loadEndpointsJsonFromKv = async (kv: KVNamespace | undefined): Promise<string | null> => {
+  if (!kv) return null;
+  return await kv.get(KV_KEY_IP_ROTATE_ENDPOINTS, 'text');
+};
+
 export {
   AUTH_TYPE_API_KEY,
   AUTH_TYPE_IAM,
+  KV_KEY_IP_ROTATE_ENDPOINTS,
+  buildRewrittenUrl,
+  extractRegionFromEndpoint,
+  filterEndpointsByBannedRegions,
   getEndpointCount,
+  getEndpointList,
   getNextEndpoint,
   isIpRotateTarget,
+  loadEndpointsJsonFromKv,
+  parseBannedRegions,
   parseIpRotateConfig,
+  pickRandomElement,
   rewriteUrlForIpRotate,
+  selectRegionAwareEndpoint,
 };

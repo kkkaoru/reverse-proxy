@@ -78,6 +78,7 @@ interface FetchWithRetryParams {
   readonly body?: string;
   readonly timeoutMs?: number;
   readonly envDefaultTimeoutMs?: string;
+  readonly wallClockSignal?: AbortSignal;
 }
 
 interface FetchWithRetryResult {
@@ -116,6 +117,23 @@ interface ParseConfigFailure {
 
 type ParsedConfig = ParseConfigResult | ParseConfigFailure;
 
+interface IndexedEndpoint {
+  readonly endpoint: EndpointWithApiKey;
+  readonly index: number;
+}
+
+interface RegionAwareEndpointResult {
+  readonly endpoint: EndpointWithApiKey;
+  readonly region: string;
+  readonly index: number;
+}
+
+interface SelectRegionAwareEndpointParams {
+  readonly endpoints: readonly EndpointWithApiKey[];
+  readonly triedRegions: ReadonlySet<string>;
+  readonly triedEndpointIndices: ReadonlySet<number>;
+}
+
 export type {
   EndpointWithApiKey,
   FetchRetryResult,
@@ -125,6 +143,7 @@ export type {
   FetchWithRetryResult,
   GetEndpointParams,
   GetNextEndpointResult,
+  IndexedEndpoint,
   IpRotateAuth,
   IpRotateAuthApiKey,
   IpRotateAuthIam,
@@ -132,8 +151,10 @@ export type {
   IpRotateEndpoints,
   ParseConfigParams,
   ParsedConfig,
+  RegionAwareEndpointResult,
   RewriteFailure,
   RewriteResult,
   RewriteUrlResult,
+  SelectRegionAwareEndpointParams,
   TimeoutConfig,
 };
