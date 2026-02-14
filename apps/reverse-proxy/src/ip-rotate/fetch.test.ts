@@ -11,12 +11,14 @@ import {
   defaultTimeoutConfig,
   ERROR_ALL_ENDPOINTS_FAILED,
   ERROR_NO_ENDPOINTS_AVAILABLE,
+  ERROR_WALL_CLOCK_TIMEOUT,
   fetchWithAuth,
   fetchWithRetry,
   getDefaultTimeoutFromEnv,
   isErrorStatus,
   isTimeoutError,
   MAX_TIMEOUT_MS,
+  MIN_RETRIES,
   MIN_TIMEOUT_MS,
   parseEnvTimeout,
   STATUS_ERROR_THRESHOLD,
@@ -41,16 +43,20 @@ test('STATUS_ERROR_THRESHOLD is 400', () => {
   expect(STATUS_ERROR_THRESHOLD).toBe(400);
 });
 
-test('DEFAULT_TIMEOUT_MS is 3000', () => {
-  expect(DEFAULT_TIMEOUT_MS).toBe(3000);
+test('DEFAULT_TIMEOUT_MS is 2000', () => {
+  expect(DEFAULT_TIMEOUT_MS).toBe(2000);
 });
 
-test('MIN_TIMEOUT_MS is 1000', () => {
-  expect(MIN_TIMEOUT_MS).toBe(1000);
+test('MIN_TIMEOUT_MS is 2000', () => {
+  expect(MIN_TIMEOUT_MS).toBe(2000);
 });
 
-test('MAX_TIMEOUT_MS is 10000', () => {
-  expect(MAX_TIMEOUT_MS).toBe(10000);
+test('MAX_TIMEOUT_MS is 8000', () => {
+  expect(MAX_TIMEOUT_MS).toBe(8000);
+});
+
+test('MIN_RETRIES is 5', () => {
+  expect(MIN_RETRIES).toBe(5);
 });
 
 test('TIMEOUT_ADJUSTMENT_MS is 500', () => {
@@ -66,15 +72,15 @@ test('ERROR_NO_ENDPOINTS_AVAILABLE message', () => {
 });
 
 test('defaultTimeoutConfig defaultMs', () => {
-  expect(defaultTimeoutConfig.defaultMs).toBe(3000);
+  expect(defaultTimeoutConfig.defaultMs).toBe(2000);
 });
 
 test('defaultTimeoutConfig minMs', () => {
-  expect(defaultTimeoutConfig.minMs).toBe(1000);
+  expect(defaultTimeoutConfig.minMs).toBe(2000);
 });
 
 test('defaultTimeoutConfig maxMs', () => {
-  expect(defaultTimeoutConfig.maxMs).toBe(10000);
+  expect(defaultTimeoutConfig.maxMs).toBe(8000);
 });
 
 test('defaultTimeoutConfig adjustmentMs', () => {
@@ -97,16 +103,28 @@ test('isErrorStatus false for 399', () => {
   expect(isErrorStatus(399)).toBe(false);
 });
 
-test('calculateMaxRetries for 3 endpoints', () => {
-  expect(calculateMaxRetries(3)).toBe(6);
+test('calculateMaxRetries for 3 endpoints returns min 5', () => {
+  expect(calculateMaxRetries(3)).toBe(5);
 });
 
-test('calculateMaxRetries for 1 endpoint', () => {
-  expect(calculateMaxRetries(1)).toBe(2);
+test('calculateMaxRetries for 5 endpoints returns 5', () => {
+  expect(calculateMaxRetries(5)).toBe(5);
 });
 
-test('calculateMaxRetries for 0 endpoints', () => {
-  expect(calculateMaxRetries(0)).toBe(0);
+test('calculateMaxRetries for 10 endpoints returns 10', () => {
+  expect(calculateMaxRetries(10)).toBe(10);
+});
+
+test('calculateMaxRetries for 51 endpoints returns 51', () => {
+  expect(calculateMaxRetries(51)).toBe(51);
+});
+
+test('calculateMaxRetries for 1 endpoint returns min 5', () => {
+  expect(calculateMaxRetries(1)).toBe(5);
+});
+
+test('calculateMaxRetries for 0 endpoints returns min 5', () => {
+  expect(calculateMaxRetries(0)).toBe(5);
 });
 
 test('parseEnvTimeout undefined', () => {
@@ -130,7 +148,7 @@ test('parseEnvTimeout leading zeros', () => {
 });
 
 test('getDefaultTimeoutFromEnv undefined', () => {
-  expect(getDefaultTimeoutFromEnv(undefined)).toBe(3000);
+  expect(getDefaultTimeoutFromEnv(undefined)).toBe(2000);
 });
 
 test('getDefaultTimeoutFromEnv valid', () => {
@@ -138,15 +156,15 @@ test('getDefaultTimeoutFromEnv valid', () => {
 });
 
 test('getDefaultTimeoutFromEnv invalid', () => {
-  expect(getDefaultTimeoutFromEnv('invalid')).toBe(3000);
+  expect(getDefaultTimeoutFromEnv('invalid')).toBe(2000);
 });
 
 test('clampTimeout below min', () => {
-  expect(clampTimeout(500, defaultTimeoutConfig)).toBe(1000);
+  expect(clampTimeout(500, defaultTimeoutConfig)).toBe(2000);
 });
 
 test('clampTimeout above max', () => {
-  expect(clampTimeout(15000, defaultTimeoutConfig)).toBe(10000);
+  expect(clampTimeout(15000, defaultTimeoutConfig)).toBe(8000);
 });
 
 test('clampTimeout within range', () => {
@@ -154,7 +172,7 @@ test('clampTimeout within range', () => {
 });
 
 test('clampTimeout negative', () => {
-  expect(clampTimeout(-100, defaultTimeoutConfig)).toBe(1000);
+  expect(clampTimeout(-100, defaultTimeoutConfig)).toBe(2000);
 });
 
 test('adjustTimeoutOnSuccess normal', () => {
@@ -162,11 +180,11 @@ test('adjustTimeoutOnSuccess normal', () => {
 });
 
 test('adjustTimeoutOnSuccess clamp to min', () => {
-  expect(adjustTimeoutOnSuccess(1200, defaultTimeoutConfig)).toBe(1000);
+  expect(adjustTimeoutOnSuccess(2200, defaultTimeoutConfig)).toBe(2000);
 });
 
 test('adjustTimeoutOnSuccess at min', () => {
-  expect(adjustTimeoutOnSuccess(1000, defaultTimeoutConfig)).toBe(1000);
+  expect(adjustTimeoutOnSuccess(2000, defaultTimeoutConfig)).toBe(2000);
 });
 
 test('adjustTimeoutOnFailure normal', () => {
@@ -174,11 +192,11 @@ test('adjustTimeoutOnFailure normal', () => {
 });
 
 test('adjustTimeoutOnFailure clamp to max', () => {
-  expect(adjustTimeoutOnFailure(9800, defaultTimeoutConfig)).toBe(10000);
+  expect(adjustTimeoutOnFailure(7800, defaultTimeoutConfig)).toBe(8000);
 });
 
 test('adjustTimeoutOnFailure at max', () => {
-  expect(adjustTimeoutOnFailure(10000, defaultTimeoutConfig)).toBe(10000);
+  expect(adjustTimeoutOnFailure(8000, defaultTimeoutConfig)).toBe(8000);
 });
 
 test('isTimeoutError true for TimeoutError', () => {
@@ -497,8 +515,8 @@ test('fetchWithRetry uses correct endpoint-specific API key on each retry', asyn
     method: 'GET',
   });
 
-  // Should have tried all endpoints multiple times (3 endpoints * 2 = 6 retries)
-  expect(capturedApiKeys.length).toBe(6);
+  // Should have tried max(3, 5) = 5 retries
+  expect(capturedApiKeys.length).toBe(5);
 
   // Verify endpoint-specific keys are used, not the base key
   expect(capturedApiKeys).not.toContain('base-key-should-not-be-used');
@@ -509,7 +527,6 @@ test('fetchWithRetry uses correct endpoint-specific API key on each retry', asyn
   expect(capturedApiKeys[2]).toBe('endpoint-key-3');
   expect(capturedApiKeys[3]).toBe('endpoint-key-1');
   expect(capturedApiKeys[4]).toBe('endpoint-key-2');
-  expect(capturedApiKeys[5]).toBe('endpoint-key-3');
 });
 
 test('fetchWithRetry correctly matches URL and API key on each request', async () => {
@@ -539,8 +556,8 @@ test('fetchWithRetry correctly matches URL and API key on each request', async (
     method: 'GET',
   });
 
-  // Should have tried 4 times (2 endpoints * 2)
-  expect(capturedRequests.length).toBe(4);
+  // Should have tried 5 times (max(2, 5) = 5)
+  expect(capturedRequests.length).toBe(5);
 
   // Verify each URL is matched with the correct API key
   for (const req of capturedRequests) {
@@ -560,6 +577,8 @@ test('fetchWithRetry correctly matches URL and API key on each request', async (
   expect(capturedRequests[2]?.apiKey).toBe('key-for-gateway-1');
   expect(capturedRequests[3]?.url).toContain('gateway-2');
   expect(capturedRequests[3]?.apiKey).toBe('key-for-gateway-2');
+  expect(capturedRequests[4]?.url).toContain('gateway-1');
+  expect(capturedRequests[4]?.apiKey).toBe('key-for-gateway-1');
 });
 
 test('fetchWithRetry returns lastUsedEndpoint on failure', async () => {
@@ -589,4 +608,98 @@ test('fetchWithRetry returns lastUsedEndpoint on failure', async () => {
     expect(result.lastUsedEndpoint).not.toBeNull();
     expect(result.lastUsedEndpoint).toContain('gateway-');
   }
+});
+
+test('ERROR_WALL_CLOCK_TIMEOUT message', () => {
+  expect(ERROR_WALL_CLOCK_TIMEOUT).toBe('Wall clock timeout exceeded');
+});
+
+test('fetchWithRetry stops retries when wallClockSignal is aborted', async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(new Response('error', { status: 500 }));
+
+  const controller: AbortController = new AbortController();
+  controller.abort();
+
+  const result = await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'key' },
+    },
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+    wallClockSignal: controller.signal,
+  });
+
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    expect(result.error).toBe('Wall clock timeout exceeded');
+  }
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});
+
+test('fetchWithRetry stops retries mid-loop when wallClockSignal aborts', async () => {
+  let callCount = 0;
+  const controller: AbortController = new AbortController();
+
+  globalThis.fetch = vi.fn().mockImplementation(() => {
+    callCount++;
+    if (callCount >= 2) {
+      controller.abort();
+    }
+    return Promise.resolve(new Response('error', { status: 500 }));
+  });
+
+  const result = await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+          { endpoint: 'https://api3.example.com', apiKey: 'key3' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'key' },
+    },
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+    wallClockSignal: controller.signal,
+  });
+
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    expect(result.error).toBe('Wall clock timeout exceeded');
+  }
+  // Should have stopped after 2 calls, not retried all 5
+  expect(callCount).toBe(2);
+});
+
+test('fetchWithRetry passes wallClockSignal without affecting normal success', async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+
+  const controller: AbortController = new AbortController();
+
+  const result = await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [{ endpoint: 'https://api.example.com', apiKey: 'key1' }],
+      },
+      auth: { type: 'api-key', apiKey: 'key' },
+    },
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+    wallClockSignal: controller.signal,
+  });
+
+  expect(result.success).toBe(true);
 });

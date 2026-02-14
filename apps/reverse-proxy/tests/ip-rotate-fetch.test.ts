@@ -8,7 +8,9 @@ import {
   ERROR_NO_ENDPOINTS_AVAILABLE,
   fetchWithAuth,
   fetchWithRetry,
+  getDefaultTimeoutFromEnv,
   isErrorStatus,
+  isRetriableError,
   STATUS_ERROR_THRESHOLD,
 } from '../src/ip-rotate/fetch.ts';
 import type {
@@ -243,10 +245,11 @@ describe('ip-rotate-fetch retry logic', () => {
     expect(isErrorStatus(399)).toBe(false);
   });
 
-  test('calculateMaxRetries returns endpoint count * 2', () => {
-    expect(calculateMaxRetries(3)).toBe(6);
-    expect(calculateMaxRetries(1)).toBe(2);
-    expect(calculateMaxRetries(5)).toBe(10);
+  test('calculateMaxRetries returns max of endpoint count and MIN_RETRIES', () => {
+    expect(calculateMaxRetries(3)).toBe(5);
+    expect(calculateMaxRetries(1)).toBe(5);
+    expect(calculateMaxRetries(5)).toBe(5);
+    expect(calculateMaxRetries(10)).toBe(10);
   });
 
   test('fetchWithRetry returns success on first successful response', async () => {
@@ -381,7 +384,7 @@ describe('ip-rotate-fetch retry logic', () => {
       expect(result.error).toBe(ERROR_ALL_ENDPOINTS_FAILED);
       expect(result.lastResponse?.status).toBe(500);
     }
-    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(5);
   });
 
   test('fetchWithRetry returns failure when no endpoints available', async () => {
@@ -435,11 +438,12 @@ describe('ip-rotate-fetch retry logic', () => {
 
     await fetchWithRetry(params);
 
-    expect(capturedUrls).toHaveLength(4);
+    expect(capturedUrls).toHaveLength(5);
     expect(capturedUrls[0]).toBe('https://api1.example.com/path');
     expect(capturedUrls[1]).toBe('https://api2.example.com/path');
     expect(capturedUrls[2]).toBe('https://api1.example.com/path');
     expect(capturedUrls[3]).toBe('https://api2.example.com/path');
+    expect(capturedUrls[4]).toBe('https://api1.example.com/path');
   });
 
   test('fetchWithRetry uses endpoint-specific API key', async () => {
@@ -469,10 +473,301 @@ describe('ip-rotate-fetch retry logic', () => {
 
     await fetchWithRetry(params);
 
-    expect(capturedHeaders).toHaveLength(4);
+    expect(capturedHeaders).toHaveLength(5);
     expect(capturedHeaders[0]?.['x-api-key']).toBe('endpoint-key-1');
     expect(capturedHeaders[1]?.['x-api-key']).toBe('endpoint-key-2');
     expect(capturedHeaders[2]?.['x-api-key']).toBe('endpoint-key-1');
     expect(capturedHeaders[3]?.['x-api-key']).toBe('endpoint-key-2');
+    expect(capturedHeaders[4]?.['x-api-key']).toBe('endpoint-key-1');
   });
+});
+
+describe('isRetriableError', () => {
+  test('isRetriableError returns true for TimeoutError', () => {
+    const error: Error = new Error('The operation timed out');
+    error.name = 'TimeoutError';
+    expect(isRetriableError(error)).toBe(true);
+  });
+
+  test('isRetriableError returns true for AbortError with timeout message', () => {
+    const error: Error = new Error('The operation was aborted due to timeout');
+    error.name = 'AbortError';
+    expect(isRetriableError(error)).toBe(true);
+  });
+
+  test('isRetriableError returns false for AbortError without timeout message', () => {
+    const error: Error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    expect(isRetriableError(error)).toBe(false);
+  });
+
+  test('isRetriableError returns true for TypeError', () => {
+    const error: TypeError = new TypeError('fetch failed');
+    expect(isRetriableError(error)).toBe(true);
+  });
+
+  test('isRetriableError returns false for generic Error', () => {
+    const error: Error = new Error('Something went wrong');
+    expect(isRetriableError(error)).toBe(false);
+  });
+
+  test('isRetriableError returns false for non-Error values', () => {
+    expect(isRetriableError('string error')).toBe(false);
+    expect(isRetriableError(null)).toBe(false);
+    expect(isRetriableError(undefined)).toBe(false);
+  });
+});
+
+describe('ip-rotate-fetch retriable error retry', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  test('fetchWithRetry retries on TypeError (network error) and succeeds', async () => {
+    const capturedUrls: string[] = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrls.push(url);
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new TypeError('fetch failed'));
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    expect(capturedUrls).toHaveLength(2);
+    expect(capturedUrls[0]).toBe('https://api1.example.com/path');
+    expect(capturedUrls[1]).toBe('https://api2.example.com/path');
+  });
+
+  test('fetchWithRetry retries on AbortError with timeout message and succeeds', async () => {
+    const capturedUrls: string[] = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrls.push(url);
+      callCount++;
+      if (callCount === 1) {
+        const error: Error = new Error('The operation was aborted due to timeout');
+        error.name = 'AbortError';
+        return Promise.reject(error);
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    expect(capturedUrls).toHaveLength(2);
+    expect(capturedUrls[0]).toBe('https://api1.example.com/path');
+    expect(capturedUrls[1]).toBe('https://api2.example.com/path');
+  });
+
+  test('fetchWithRetry throws non-retriable errors immediately', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockImplementation(() => Promise.reject(new Error('Invalid auth type')));
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    await expect(fetchWithRetry(params)).rejects.toThrow('Invalid auth type');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('fetchWithRetry logs retry attempts on timeout', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        const error: Error = new Error('The operation timed out');
+        error.name = 'TimeoutError';
+        return Promise.reject(error);
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    await fetchWithRetry(params);
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[ip-rotate] retry attempt=0 endpoint=https://api1.example.com reason=timeout',
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[ip-rotate] success attempt=1 endpoint=https://api2.example.com',
+    );
+    consoleSpy.mockRestore();
+  });
+
+  test('fetchWithRetry logs retry attempts on error status', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let callCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve(new Response('error', { status: 500 }));
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    await fetchWithRetry(params);
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[ip-rotate] retry attempt=0 endpoint=https://api1.example.com reason=error-status',
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[ip-rotate] success attempt=1 endpoint=https://api2.example.com',
+    );
+    consoleSpy.mockRestore();
+  });
+});
+
+test('getDefaultTimeoutFromEnv returns parsed value for valid string', () => {
+  expect(getDefaultTimeoutFromEnv('3000')).toBe(3000);
+});
+
+test('getDefaultTimeoutFromEnv returns default for undefined', () => {
+  expect(getDefaultTimeoutFromEnv(undefined)).toBe(2000);
+});
+
+test('getDefaultTimeoutFromEnv returns default for invalid string', () => {
+  expect(getDefaultTimeoutFromEnv('abc')).toBe(2000);
+});
+
+test('getDefaultTimeoutFromEnv returns default for empty string', () => {
+  expect(getDefaultTimeoutFromEnv('')).toBe(2000);
+});
+
+test('fetchWithRetry uses envDefaultTimeoutMs when provided', async () => {
+  const originalFetch: typeof globalThis.fetch = globalThis.fetch;
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+
+  let capturedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = vi.fn().mockImplementation((_url: unknown, init?: RequestInit) => {
+    capturedSignal = init?.signal;
+    return Promise.resolve(new Response('ok', { status: 200 }));
+  }) as unknown as typeof globalThis.fetch;
+
+  const config: IpRotateConfig = {
+    endpoints: {
+      'example.com': [
+        { endpoint: 'https://api1.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      ],
+    },
+    auth: { type: 'api-key', apiKey: 'test-key' },
+  };
+
+  const params: FetchWithRetryParams = {
+    config,
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+    envDefaultTimeoutMs: '5000',
+  };
+
+  const result = await fetchWithRetry(params);
+
+  expect(result.success).toBe(true);
+  expect(capturedSignal).toBeDefined();
+
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
 });
