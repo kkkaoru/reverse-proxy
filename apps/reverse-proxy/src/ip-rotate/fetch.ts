@@ -3,22 +3,28 @@
 // SECURITY: Auth headers are for API Gateway only, NOT passed to target server
 // API Gateway consumes x-api-key and IAM signature headers before forwarding
 
-import { getEndpointCount, rewriteUrlForIpRotate } from './client.ts';
+import {
+  buildRewrittenUrl,
+  getEndpointCount,
+  getEndpointList,
+  selectRegionAwareEndpoint,
+} from './client.ts';
 import { signRequest } from './signer.ts';
 import type {
+  EndpointWithApiKey,
   FetchRetryResult,
   FetchWithAuthParams,
   FetchWithRetryParams,
   IpRotateAuth,
   IpRotateAuthApiKey,
   IpRotateAuthIam,
-  RewriteUrlResult,
+  RegionAwareEndpointResult,
   TimeoutConfig,
 } from './types.ts';
 
 // Constants at top
 const HEADER_API_KEY = 'x-api-key';
-const AUTH_TYPE_API_KEY: 'api-key' = 'api-key';
+const AUTH_TYPE_API_KEY = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
 const ERROR_INVALID_AUTH_TYPE = 'Invalid auth type';
 const ERROR_UNSUPPORTED_AUTH_TYPE = 'Unsupported auth type';
@@ -26,12 +32,15 @@ const ERROR_REQUEST_TIMEOUT = 'Request timed out';
 
 // Timeout constants
 const ENV_DEFAULT_TIMEOUT = 'DEFAULT_TIMEOUT_MS';
-const DEFAULT_TIMEOUT_MS = 3000;
-const MIN_TIMEOUT_MS = 1000;
-const MAX_TIMEOUT_MS = 10000;
+const DEFAULT_TIMEOUT_MS = 2000;
+const MIN_TIMEOUT_MS = 2000;
+const MAX_TIMEOUT_MS = 8000;
 const TIMEOUT_ADJUSTMENT_MS = 500;
 // biome-ignore lint/nursery/noSecrets: TimeoutError is a standard error name, not a secret
 const TIMEOUT_ERROR_NAME = 'TimeoutError';
+const ABORT_ERROR_NAME = 'AbortError';
+const TYPE_ERROR_NAME = 'TypeError';
+const TIMEOUT_MESSAGE_PATTERN: RegExp = /timeout/i;
 
 // Timeout configuration
 const defaultTimeoutConfig: TimeoutConfig = {
@@ -136,14 +145,15 @@ const fetchWithAuth = (params: FetchWithAuthParams): Promise<Response> => {
 
 // Constants for retry logic
 const STATUS_ERROR_THRESHOLD = 400;
-const RETRY_MULTIPLIER = 2;
+const MIN_RETRIES = 5;
 const ERROR_ALL_ENDPOINTS_FAILED = 'All endpoints failed';
 const ERROR_NO_ENDPOINTS_AVAILABLE = 'No endpoints available for domain';
+const ERROR_WALL_CLOCK_TIMEOUT = 'Wall clock timeout exceeded';
 
 // Helper functions for retry logic
 const isErrorStatus = (status: number): boolean => status >= STATUS_ERROR_THRESHOLD;
 
-const calculateMaxRetries = (endpointCount: number): number => endpointCount * RETRY_MULTIPLIER;
+const calculateMaxRetries = (endpointCount: number): number => Math.max(endpointCount, MIN_RETRIES);
 
 const createSuccessResult = (response: Response, usedEndpoint: string): FetchRetryResult => ({
   success: true,
@@ -171,126 +181,151 @@ const createAuthFromEndpoint = (baseAuth: IpRotateAuth, endpointApiKey: string):
   return baseAuth;
 };
 
-interface TryFetchEndpointParams {
+interface RegionAwareRetryState {
   readonly params: FetchWithRetryParams;
-  readonly timeoutMs: number;
-}
-
-interface TryFetchResult {
-  readonly response: Response | null;
-  readonly rewriteSuccess: boolean;
-  readonly timedOut: boolean;
-  readonly usedEndpoint: string | null;
-}
-
-interface RetryAttemptParams {
-  readonly params: FetchWithRetryParams;
+  readonly endpoints: readonly EndpointWithApiKey[];
   readonly attempt: number;
   readonly maxRetries: number;
   readonly lastResponse: Response | null;
   readonly lastUsedEndpoint: string | null;
   readonly currentTimeoutMs: number;
   readonly timeoutConfig: TimeoutConfig;
+  readonly triedRegions: Set<string>;
+  readonly triedEndpointIndices: Set<number>;
+  readonly wallClockSignal?: AbortSignal;
 }
 
 const isTimeoutError = (error: unknown): boolean =>
   error instanceof Error && error.name === TIMEOUT_ERROR_NAME;
 
-const tryFetchEndpoint = async (fetchParams: TryFetchEndpointParams): Promise<TryFetchResult> => {
-  const rewriteResult: RewriteUrlResult = rewriteUrlForIpRotate(
-    fetchParams.params.config,
-    fetchParams.params.targetUrl,
-    fetchParams.params.counters,
-  );
+const isRetriableError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  if (error.name === TIMEOUT_ERROR_NAME) return true;
+  if (error.name === ABORT_ERROR_NAME && TIMEOUT_MESSAGE_PATTERN.test(error.message)) return true;
+  if (error.name === TYPE_ERROR_NAME) return true;
+  return false;
+};
 
-  if (!rewriteResult.success) {
-    return { response: null, rewriteSuccess: false, timedOut: false, usedEndpoint: null };
-  }
-
-  const usedEndpoint: string = rewriteResult.url.origin;
-
-  // Use the endpoint-specific API key from the rewrite result
+const tryRegionAwareFetch = async (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+): Promise<{ response: Response | null; timedOut: boolean; usedEndpoint: string }> => {
+  const rewrittenUrl: URL = buildRewrittenUrl(selected.endpoint.endpoint, state.params.targetUrl);
+  const usedEndpoint: string = rewrittenUrl.origin;
   const auth: IpRotateAuth = createAuthFromEndpoint(
-    fetchParams.params.config.auth,
-    rewriteResult.apiKey,
+    state.params.config.auth,
+    selected.endpoint.apiKey,
   );
 
   try {
-    const signal: AbortSignal = createAbortSignal(fetchParams.timeoutMs);
+    const perAttemptSignal: AbortSignal = createAbortSignal(state.currentTimeoutMs);
+    const signal: AbortSignal = state.wallClockSignal
+      ? AbortSignal.any([perAttemptSignal, state.wallClockSignal])
+      : perAttemptSignal;
     const response: Response = await fetchWithAuth({
-      url: rewriteResult.url,
+      url: rewrittenUrl,
       auth,
-      headers: fetchParams.params.headers,
-      method: fetchParams.params.method,
-      body: fetchParams.params.body,
+      headers: state.params.headers,
+      method: state.params.method,
+      body: state.params.body,
       signal,
     });
-    return { response, rewriteSuccess: true, timedOut: false, usedEndpoint };
+    return { response, timedOut: false, usedEndpoint };
   } catch (error: unknown) {
-    if (isTimeoutError(error)) {
-      return { response: null, rewriteSuccess: true, timedOut: true, usedEndpoint };
+    if (isRetriableError(error)) {
+      return { response: null, timedOut: true, usedEndpoint };
     }
     throw error;
   }
 };
 
-const retryAttempt = async (retryParams: RetryAttemptParams): Promise<FetchRetryResult> => {
-  if (retryParams.attempt >= retryParams.maxRetries) {
-    return createFailureResult(
-      retryParams.lastResponse,
-      retryParams.lastUsedEndpoint,
-      ERROR_ALL_ENDPOINTS_FAILED,
+const regionAwareRetryAttempt = (state: RegionAwareRetryState): Promise<FetchRetryResult> => {
+  if (state.wallClockSignal?.aborted) {
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log('[ip-rotate] wall clock timeout exceeded, stopping retries');
+    return Promise.resolve(
+      createFailureResult(state.lastResponse, state.lastUsedEndpoint, ERROR_WALL_CLOCK_TIMEOUT),
     );
   }
 
-  const result: TryFetchResult = await tryFetchEndpoint({
-    params: retryParams.params,
-    timeoutMs: retryParams.currentTimeoutMs,
+  if (state.attempt >= state.maxRetries) {
+    return Promise.resolve(
+      createFailureResult(state.lastResponse, state.lastUsedEndpoint, ERROR_ALL_ENDPOINTS_FAILED),
+    );
+  }
+
+  const selected: RegionAwareEndpointResult | null = selectRegionAwareEndpoint({
+    endpoints: state.endpoints,
+    triedRegions: state.triedRegions,
+    triedEndpointIndices: state.triedEndpointIndices,
   });
 
-  if (!result.rewriteSuccess) {
-    return createFailureResult(
-      retryParams.lastResponse,
-      retryParams.lastUsedEndpoint,
-      ERROR_NO_ENDPOINTS_AVAILABLE,
-    );
+  if (!selected) {
+    // All endpoints tried, fall back to round-robin from the beginning
+    state.triedEndpointIndices.clear();
+    state.triedRegions.clear();
+    const retrySelected: RegionAwareEndpointResult | null = selectRegionAwareEndpoint({
+      endpoints: state.endpoints,
+      triedRegions: state.triedRegions,
+      triedEndpointIndices: state.triedEndpointIndices,
+    });
+    if (!retrySelected) {
+      return Promise.resolve(
+        createFailureResult(
+          state.lastResponse,
+          state.lastUsedEndpoint,
+          ERROR_NO_ENDPOINTS_AVAILABLE,
+        ),
+      );
+    }
+    return regionAwareRetryAttemptWithSelected(state, retrySelected);
   }
 
-  // Handle timeout - increase timeout and retry
+  return regionAwareRetryAttemptWithSelected(state, selected);
+};
+
+const regionAwareRetryAttemptWithSelected = async (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+): Promise<FetchRetryResult> => {
+  state.triedEndpointIndices.add(selected.index);
+  if (selected.region) {
+    state.triedRegions.add(selected.region);
+  }
+
+  const result = await tryRegionAwareFetch(state, selected);
+
   if (result.timedOut) {
-    const newTimeout: number = adjustTimeoutOnFailure(
-      retryParams.currentTimeoutMs,
-      retryParams.timeoutConfig,
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log(
+      `[ip-rotate] retry attempt=${state.attempt} endpoint=${result.usedEndpoint} reason=timeout`,
     );
-    return retryAttempt({
-      params: retryParams.params,
-      attempt: retryParams.attempt + 1,
-      maxRetries: retryParams.maxRetries,
-      lastResponse: retryParams.lastResponse,
+    const newTimeout: number = adjustTimeoutOnFailure(state.currentTimeoutMs, state.timeoutConfig);
+    return regionAwareRetryAttempt({
+      ...state,
+      attempt: state.attempt + 1,
       lastUsedEndpoint: result.usedEndpoint,
       currentTimeoutMs: newTimeout,
-      timeoutConfig: retryParams.timeoutConfig,
     });
   }
 
-  // Handle success - decrease timeout for next request
   if (result.response && !isErrorStatus(result.response.status)) {
-    return createSuccessResult(result.response, result.usedEndpoint ?? '');
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log(`[ip-rotate] success attempt=${state.attempt} endpoint=${result.usedEndpoint}`);
+    return createSuccessResult(result.response, result.usedEndpoint);
   }
 
-  // Handle error status - increase timeout and retry
-  const newTimeout: number = adjustTimeoutOnFailure(
-    retryParams.currentTimeoutMs,
-    retryParams.timeoutConfig,
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log(
+    `[ip-rotate] retry attempt=${state.attempt} endpoint=${result.usedEndpoint} reason=error-status`,
   );
-  return retryAttempt({
-    params: retryParams.params,
-    attempt: retryParams.attempt + 1,
-    maxRetries: retryParams.maxRetries,
+  const newTimeout: number = adjustTimeoutOnFailure(state.currentTimeoutMs, state.timeoutConfig);
+  return regionAwareRetryAttempt({
+    ...state,
+    attempt: state.attempt + 1,
     lastResponse: result.response,
     lastUsedEndpoint: result.usedEndpoint,
     currentTimeoutMs: newTimeout,
-    timeoutConfig: retryParams.timeoutConfig,
   });
 };
 
@@ -301,19 +336,25 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
     return Promise.resolve(createFailureResult(null, null, ERROR_NO_ENDPOINTS_AVAILABLE));
   }
 
+  const endpoints: readonly EndpointWithApiKey[] =
+    getEndpointList(params.config, params.targetUrl.host) ?? [];
   const maxRetries: number = calculateMaxRetries(endpointCount);
   const initialTimeout: number =
     params.timeoutMs ?? getDefaultTimeoutFromEnv(params.envDefaultTimeoutMs);
   const timeoutConfig: TimeoutConfig = defaultTimeoutConfig;
 
-  return retryAttempt({
+  return regionAwareRetryAttempt({
     params,
+    endpoints,
     attempt: 0,
     maxRetries,
     lastResponse: null,
     lastUsedEndpoint: null,
     currentTimeoutMs: clampTimeout(initialTimeout, timeoutConfig),
     timeoutConfig,
+    triedRegions: new Set<string>(),
+    triedEndpointIndices: new Set<number>(),
+    wallClockSignal: params.wallClockSignal,
   });
 };
 
@@ -328,12 +369,15 @@ export {
   ERROR_ALL_ENDPOINTS_FAILED,
   ERROR_NO_ENDPOINTS_AVAILABLE,
   ERROR_REQUEST_TIMEOUT,
+  ERROR_WALL_CLOCK_TIMEOUT,
   fetchWithAuth,
   fetchWithRetry,
   getDefaultTimeoutFromEnv,
   isErrorStatus,
+  isRetriableError,
   isTimeoutError,
   MAX_TIMEOUT_MS,
+  MIN_RETRIES,
   MIN_TIMEOUT_MS,
   parseEnvTimeout,
   STATUS_ERROR_THRESHOLD,
