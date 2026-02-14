@@ -27,4 +27,11 @@ trap restore_template EXIT
 cd "$APP_DIR"
 bunx wrangler deploy "$@"
 
+# Upload IP rotate endpoints to KV if file exists
+ENDPOINTS_FILE="/tmp/ip-rotate-endpoints.json"
+if [ -f "$ENDPOINTS_FILE" ]; then
+  echo "Uploading IP rotate endpoints to KV..."
+  "$SCRIPT_DIR/upload-endpoints-to-kv.sh"
+fi
+
 echo "Deploy completed successfully"
