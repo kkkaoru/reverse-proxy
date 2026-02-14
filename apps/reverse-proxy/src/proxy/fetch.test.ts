@@ -152,6 +152,7 @@ describe('performStandardFetch', () => {
       cache: 'no-store',
       headers,
       redirect: 'manual',
+      signal: undefined,
     });
   });
 });
@@ -164,7 +165,11 @@ describe('performIpRotateFetch', () => {
   it('returns null when no ipRotateConfig', async () => {
     const options: ProxyCacheOptions = createMockOptions();
     const url: URL = new URL('https://example.com');
-    const result: Response | null = await performIpRotateFetch(options, url, {});
+    const result: Response | null = await performIpRotateFetch({
+      options,
+      url,
+      headers: {},
+    });
     expect(result).toBeNull();
   });
 
@@ -175,7 +180,11 @@ describe('performIpRotateFetch', () => {
     };
     const options: ProxyCacheOptions = createMockOptions({ ipRotateConfig });
     const url: URL = new URL('https://example.com');
-    const result: Response | null = await performIpRotateFetch(options, url, {});
+    const result: Response | null = await performIpRotateFetch({
+      options,
+      url,
+      headers: {},
+    });
     expect(result).toBeNull();
   });
 });
@@ -191,7 +200,11 @@ describe('performFetch', () => {
 
   it('uses standard fetch when IP rotation not configured', async () => {
     const options: ProxyCacheOptions = createMockOptions();
-    const response: Response = await performFetch(options, 'https://example.com', {});
+    const response: Response = await performFetch({
+      options,
+      currentUrl: 'https://example.com',
+      headers: {},
+    });
     expect(response.status).toBe(200);
     expect(globalThis.fetch).toHaveBeenCalled();
   });
@@ -202,7 +215,11 @@ describe('performFetch', () => {
       auth: { type: 'api-key', apiKey: 'test' },
     };
     const options: ProxyCacheOptions = createMockOptions({ ipRotateConfig });
-    const response: Response = await performFetch(options, 'https://example.com', {});
+    const response: Response = await performFetch({
+      options,
+      currentUrl: 'https://example.com',
+      headers: {},
+    });
     expect(response.status).toBe(200);
     expect(globalThis.fetch).toHaveBeenCalled();
   });
@@ -213,7 +230,11 @@ describe('performFetch', () => {
       auth: { type: 'api-key', apiKey: 'test' },
     };
     const options: ProxyCacheOptions = createMockOptions({ ipRotateConfig });
-    const response: Response = await performFetch(options, 'https://example.com/path', {});
+    const response: Response = await performFetch({
+      options,
+      currentUrl: 'https://example.com/path',
+      headers: {},
+    });
     expect(response.status).toBe(200);
   });
 });

@@ -79,6 +79,11 @@ it('extractCharsetFromContentTypeForTest returns null when no charset', () => {
   expect(extractCharsetFromContentTypeForTest('application/json')).toBe(null);
 });
 
+it('extractCharsetFromContentTypeForTest returns null when charset is empty', () => {
+  expect(extractCharsetFromContentTypeForTest('text/html; charset=')).toBe(null);
+  expect(extractCharsetFromContentTypeForTest('text/html; charset= ')).toBe(null);
+});
+
 it('isHtmlContentTypeForTest returns true for text/html', () => {
   expect(isHtmlContentTypeForTest('text/html')).toBe(true);
   expect(isHtmlContentTypeForTest('text/html; charset=utf-8')).toBe(true);
@@ -111,7 +116,7 @@ it('convertResponseToUtf8 returns original response for utf-8 html', async () =>
 
 it('convertResponseToUtf8 converts euc-jp html to utf-8', async () => {
   const japaneseText: string = 'Japanese text: test';
-  const eucjpBytes: Blob = new Blob([new Uint8Array([...iconv.encode(japaneseText, 'euc-jp')])]);
+  const eucjpBytes: Blob = new Blob([new Uint8Array(iconv.encode(japaneseText, 'euc-jp'))]);
   const response: Response = new Response(eucjpBytes, {
     headers: { 'content-type': CONTENT_TYPE_HTML_EUCJP },
   });
@@ -123,9 +128,7 @@ it('convertResponseToUtf8 converts euc-jp html to utf-8', async () => {
 
 it('convertResponseToUtf8 converts shift_jis html to utf-8', async () => {
   const japaneseText: string = 'Shift_JIS content: abc';
-  const shiftjisBytes: Blob = new Blob([
-    new Uint8Array([...iconv.encode(japaneseText, 'shift_jis')]),
-  ]);
+  const shiftjisBytes: Blob = new Blob([new Uint8Array(iconv.encode(japaneseText, 'shift_jis'))]);
   const response: Response = new Response(shiftjisBytes, {
     headers: { 'content-type': CONTENT_TYPE_HTML_SHIFTJIS },
   });
@@ -138,7 +141,7 @@ it('convertResponseToUtf8 converts shift_jis html to utf-8', async () => {
 it('convertResponseToUtf8 detects encoding from meta tag when header has no charset', async () => {
   const metaTag: string = '<meta charset="euc-jp">';
   const content: string = `<html><head>${metaTag}</head><body>test content</body></html>`;
-  const eucjpBytes: Blob = new Blob([new Uint8Array([...iconv.encode(content, 'euc-jp')])]);
+  const eucjpBytes: Blob = new Blob([new Uint8Array(iconv.encode(content, 'euc-jp'))]);
   const response: Response = new Response(eucjpBytes, {
     headers: { 'content-type': CONTENT_TYPE_HTML_PLAIN },
   });
@@ -166,7 +169,7 @@ it('convertResponseToUtf8 handles response without content-type header', async (
 
 it('convertResponseToUtf8 preserves response status and statusText', async () => {
   const japaneseText: string = 'Status test';
-  const eucjpBytes: Blob = new Blob([new Uint8Array([...iconv.encode(japaneseText, 'euc-jp')])]);
+  const eucjpBytes: Blob = new Blob([new Uint8Array(iconv.encode(japaneseText, 'euc-jp'))]);
   const response: Response = new Response(eucjpBytes, {
     status: 201,
     statusText: 'Created',
@@ -180,12 +183,25 @@ it('convertResponseToUtf8 preserves response status and statusText', async () =>
 it('convertResponseToUtf8 detects encoding from http-equiv meta tag', async () => {
   const metaTag: string = '<meta http-equiv="Content-Type" content="text/html; charset=euc-jp">';
   const content: string = `<html><head>${metaTag}</head><body>test</body></html>`;
-  const eucjpBytes: Blob = new Blob([new Uint8Array([...iconv.encode(content, 'euc-jp')])]);
+  const eucjpBytes: Blob = new Blob([new Uint8Array(iconv.encode(content, 'euc-jp'))]);
   const response: Response = new Response(eucjpBytes, {
     headers: { 'content-type': CONTENT_TYPE_HTML_PLAIN },
   });
   const converted: Response = await convertResponseToUtf8(response);
   expect(converted.headers.get('content-type')).toBe('text/html; charset=utf-8');
+});
+
+it('convertResponseToUtf8 converts euc-jp when charset header is empty', async () => {
+  const metaTag: string = '<meta charset="EUC-JP">';
+  const content: string = `<html><head>${metaTag}</head><body>test</body></html>`;
+  const eucjpBytes: Blob = new Blob([new Uint8Array(iconv.encode(content, 'euc-jp'))]);
+  const response: Response = new Response(eucjpBytes, {
+    headers: { 'content-type': 'text/html; charset=' },
+  });
+  const converted: Response = await convertResponseToUtf8(response);
+  expect(converted.headers.get('content-type')).toBe('text/html; charset=utf-8');
+  const text: string = await converted.text();
+  expect(text).toBe(content);
 });
 
 it('convertResponseToUtf8 returns original when html meta says utf-8', async () => {

@@ -26,8 +26,8 @@ const CHARSET_PREFIX: string = 'charset=';
 const ENCODING_UTF8: string = 'utf-8';
 const HEADER_CONTENT_TYPE_UTF8: string = 'text/html; charset=utf-8';
 const LATIN1_ENCODING: string = 'latin1';
-const CONFIDENCE_HIGH: 'high' = 'high';
-const CONFIDENCE_LOW: 'low' = 'low';
+const CONFIDENCE_HIGH = 'high';
+const CONFIDENCE_LOW = 'low';
 
 // Encoding name normalization map
 const ENCODING_NAME_MAP: Record<string, string> = {
@@ -86,7 +86,11 @@ const extractCharsetFromContentType = (contentType: string): string | null => {
   const semicolonIndex: number = charsetValue.indexOf(';');
   const rawCharset: string =
     semicolonIndex === -1 ? charsetValue : charsetValue.slice(0, semicolonIndex);
-  return normalizeEncodingName(rawCharset.trim().replace(/["']/g, ''));
+  const trimmed: string = rawCharset.trim().replace(/["']/g, '');
+  if (!trimmed) {
+    return null;
+  }
+  return normalizeEncodingName(trimmed);
 };
 
 const isHtmlContentType = (contentType: string): boolean =>

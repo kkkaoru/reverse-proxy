@@ -3,6 +3,7 @@
 
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import type { IpRotateConfig } from '../ip-rotate/types.ts';
 import { logEvent } from './cache.ts';
 import {
   ERROR_MISSING_URL,
@@ -13,7 +14,7 @@ import {
   STATUS_BAD_REQUEST,
 } from './constants.ts';
 import { createHandlerMaps } from './handlers.ts';
-import { createOptionsFromEnv } from './options.ts';
+import { createOptionsFromEnv, resolveIpRotateConfig } from './options.ts';
 import { createErrorResponse } from './responses.ts';
 import type {
   BatchRequestHandler,
@@ -26,6 +27,25 @@ import { buildTargetUrl, extractRawQuery } from './url.ts';
 
 // Module-level counter for IP rotation round-robin
 const ipRotateCounters: Map<string, number> = new Map();
+
+// Module-level cache for IP rotation config loaded from KV
+const ipRotateConfigCache: Map<string, IpRotateConfig> = new Map();
+const IP_ROTATE_CONFIG_KEY = 'default';
+
+// Load IP rotation config with module-level caching
+const getOrLoadIpRotateConfig = async (
+  env: ProxyCacheEnv,
+  cache: Map<string, IpRotateConfig>,
+): Promise<IpRotateConfig | undefined> => {
+  const cached: IpRotateConfig | undefined = cache.get(IP_ROTATE_CONFIG_KEY);
+  if (cached) return cached;
+
+  const config: IpRotateConfig | undefined = await resolveIpRotateConfig(env);
+  if (config) {
+    cache.set(IP_ROTATE_CONFIG_KEY, config);
+  }
+  return config;
+};
 
 // Handle POST batch request
 const handlePostRequest = async (
@@ -65,7 +85,16 @@ export const createProxyCacheMiddleware = (
       return;
     }
 
-    const options: ProxyCacheOptions = createOptionsFromEnv(staticOptions, c.env, ipRotateCounters);
+    const ipRotateConfig: IpRotateConfig | undefined = await getOrLoadIpRotateConfig(
+      c.env,
+      ipRotateConfigCache,
+    );
+    const options: ProxyCacheOptions = createOptionsFromEnv({
+      staticOptions,
+      env: c.env,
+      counters: ipRotateCounters,
+      ipRotateConfig,
+    });
     const { queryHandlers, batchHandler } = createHandlerMaps(options);
 
     // Handle POST for batch requests

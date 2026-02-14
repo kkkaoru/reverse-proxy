@@ -85,9 +85,7 @@ describe('proxy middleware routing', () => {
 describe('proxy middleware encoding', () => {
   it('converts euc-jp response to utf-8', async () => {
     const japaneseContent: string = 'Japanese content: test';
-    const eucjpBytes: Blob = new Blob([
-      new Uint8Array([...iconv.encode(japaneseContent, 'euc-jp')]),
-    ]);
+    const eucjpBytes: Blob = new Blob([new Uint8Array(iconv.encode(japaneseContent, 'euc-jp'))]);
     setupEnvironment(() =>
       Promise.resolve(
         new Response(eucjpBytes, {

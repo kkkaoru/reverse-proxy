@@ -39,6 +39,7 @@ import {
   parseCachedContent,
   parseIpRotateConfigFromEnv,
   parseRequest,
+  resolveIpRotateConfigForPlaywright,
   STATUS_BAD_GATEWAY,
   STATUS_BAD_REQUEST,
   STATUS_NOT_FOUND,
@@ -876,4 +877,76 @@ it('handleCoreRequest falls back to browser when domain does not match ip rotate
   expect(response.status).toBe(STATUS_OK);
   expect(await response.text()).toBe('<html>browser</html>');
   expect(fetchPage).toHaveBeenCalled();
+});
+
+it('resolveIpRotateConfigForPlaywright returns config from env var', async () => {
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = await resolveIpRotateConfigForPlaywright(env);
+  expect(config).toBeDefined();
+  expect(config?.auth.type).toBe('api-key');
+});
+
+it('resolveIpRotateConfigForPlaywright returns undefined when no env and no KV', async () => {
+  const env: PlaywrightCoreEnv = {
+    CACHE_VERSION: 'v1',
+  };
+  const config = await resolveIpRotateConfigForPlaywright(env);
+  expect(config).toBeUndefined();
+});
+
+it('resolveIpRotateConfigForPlaywright returns config from KV when env var missing', async () => {
+  const mockKV = createMockKV();
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
+  mockKV.get.mockResolvedValue(endpointsJson);
+  const env: PlaywrightCoreEnv = {
+    KV: mockKV as unknown as KVNamespace,
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = await resolveIpRotateConfigForPlaywright(env);
+  expect(config).toBeDefined();
+  expect(config?.auth.type).toBe('api-key');
+  expect(mockKV.get).toHaveBeenCalledWith('ip-rotate-endpoints', 'text');
+});
+
+it('resolveIpRotateConfigForPlaywright returns undefined when KV returns null', async () => {
+  const mockKV = createMockKV();
+  mockKV.get.mockResolvedValue(null);
+  const env: PlaywrightCoreEnv = {
+    KV: mockKV as unknown as KVNamespace,
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = await resolveIpRotateConfigForPlaywright(env);
+  expect(config).toBeUndefined();
+});
+
+it('resolveIpRotateConfigForPlaywright prefers env var over KV', async () => {
+  const mockKV = createMockKV();
+  mockKV.get.mockResolvedValue('should-not-be-called');
+  const endpointsJson = JSON.stringify({
+    'example.com': [{ endpoint: 'https://api1.example.com', apiKey: 'key1' }],
+  });
+  const env: PlaywrightCoreEnv = {
+    KV: mockKV as unknown as KVNamespace,
+    CACHE_VERSION: 'v1',
+    IP_ROTATE_ENDPOINTS: endpointsJson,
+    IP_ROTATE_AUTH_TYPE: 'api-key',
+    IP_ROTATE_API_KEY: 'test-key',
+  };
+  const config = await resolveIpRotateConfigForPlaywright(env);
+  expect(config).toBeDefined();
+  expect(mockKV.get).not.toHaveBeenCalled();
 });

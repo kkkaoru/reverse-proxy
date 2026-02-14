@@ -17,8 +17,8 @@ import {
   handleCoreRequest,
   handleDeleteRequest,
   isHtmlContentType,
-  parseIpRotateConfigFromEnv,
   parseRequest,
+  resolveIpRotateConfigForPlaywright,
   validateRequest,
 } from './core.ts';
 
@@ -44,11 +44,30 @@ type WaitUntilState = 'domcontentloaded' | 'load' | 'networkidle';
 // Module-level counter for IP rotation round-robin
 const ipRotateCounters: Map<string, number> = new Map();
 
+// Module-level cache for IP rotation config loaded from KV
+const ipRotateConfigCache: Map<string, IpRotateConfig> = new Map();
+const IP_ROTATE_CONFIG_KEY = 'default';
+
 // Constants
 const BROWSER_DEFAULT_TIMEOUT_MS: number = 30000;
 const BROWSER_WAIT_UNTIL: WaitUntilState = 'domcontentloaded';
 const BROWSER_RETRY_COUNT: number = 10;
 const BROWSER_RETRY_DELAY_MS: number = 2000;
+
+// Load IP rotation config with module-level caching
+const getOrLoadIpRotateConfig = async (
+  env: PlaywrightCoreEnv,
+  cache: Map<string, IpRotateConfig>,
+): Promise<IpRotateConfig | undefined> => {
+  const cached: IpRotateConfig | undefined = cache.get(IP_ROTATE_CONFIG_KEY);
+  if (cached) return cached;
+
+  const config: IpRotateConfig | undefined = await resolveIpRotateConfigForPlaywright(env);
+  if (config) {
+    cache.set(IP_ROTATE_CONFIG_KEY, config);
+  }
+  return config;
+};
 
 // Browser-specific functions
 const getResponseContentType = (response: Awaited<ReturnType<Page['goto']>>): string =>
@@ -118,7 +137,7 @@ const fetchPageWithBrowser = (
   });
 
 // Public API
-export const handlePlaywrightRequest = (
+export const handlePlaywrightRequest = async (
   request: Request,
   env: PlaywrightEnv,
 ): Promise<Response> => {
@@ -126,11 +145,14 @@ export const handlePlaywrightRequest = (
 
   const validationError = validateRequest(env, targetUrl);
   if (validationError) {
-    return Promise.resolve(validationError);
+    return validationError;
   }
 
   const cacheKey: string = createCacheKey(targetUrl as string, env.CACHE_VERSION);
-  const ipRotateConfig: IpRotateConfig | undefined = parseIpRotateConfigFromEnv(env);
+  const ipRotateConfig: IpRotateConfig | undefined = await getOrLoadIpRotateConfig(
+    env,
+    ipRotateConfigCache,
+  );
   const ipRotateOptions: IpRotateOptions | undefined = ipRotateConfig
     ? { config: ipRotateConfig, counters: ipRotateCounters }
     : undefined;

@@ -2,7 +2,11 @@
 // This module contains all caching, validation, and response handling logic
 // that can be tested without the @cloudflare/playwright dependency
 
-import { isIpRotateTarget, parseIpRotateConfig } from '../ip-rotate/client.ts';
+import {
+  isIpRotateTarget,
+  loadEndpointsJsonFromKv,
+  parseIpRotateConfig,
+} from '../ip-rotate/client.ts';
 import { fetchWithRetry } from '../ip-rotate/fetch.ts';
 import type { FetchRetryResult, IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
 
@@ -101,6 +105,7 @@ export interface IpRotateFetchParams {
   readonly url: URL;
   readonly config: IpRotateConfig;
   readonly counters: Map<string, number>;
+  readonly wallClockSignal?: AbortSignal;
 }
 
 export interface IpRotateOptions {
@@ -143,6 +148,9 @@ export const LOG_REQUESTS_ENABLED: string = 'TRUE';
 export const PLAYWRIGHT_PATH: string = '/playwright';
 export const METHOD_GET: string = 'GET';
 export const LOG_EVENT_IP_ROTATE: string = 'ip-rotate-fetch';
+// Wall clock timeout: 100s (20s margin below Cloudflare's 120s Proxy Read Timeout)
+// See: https://developers.cloudflare.com/fundamentals/reference/connection-limits/
+export const WALL_CLOCK_TIMEOUT_MS: number = 100000;
 
 // IP Rotate functions
 export const parseIpRotateConfigFromEnv = (env: PlaywrightCoreEnv): IpRotateConfig | undefined => {
@@ -155,6 +163,27 @@ export const parseIpRotateConfigFromEnv = (env: PlaywrightCoreEnv): IpRotateConf
     region: env.IP_ROTATE_AWS_REGION,
   });
 
+  return parsed.success ? parsed.config : undefined;
+};
+
+// Resolve IP rotation config: env var first, then KV fallback
+export const resolveIpRotateConfigForPlaywright = async (
+  env: PlaywrightCoreEnv,
+): Promise<IpRotateConfig | undefined> => {
+  const fromEnv: IpRotateConfig | undefined = parseIpRotateConfigFromEnv(env);
+  if (fromEnv) return fromEnv;
+
+  const endpointsJson: string | null = await loadEndpointsJsonFromKv(env.KV);
+  if (!endpointsJson) return undefined;
+
+  const parsed: ParsedConfig = parseIpRotateConfig({
+    endpointsJson,
+    authType: env.IP_ROTATE_AUTH_TYPE,
+    apiKey: env.IP_ROTATE_API_KEY,
+    accessKeyId: env.IP_ROTATE_AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.IP_ROTATE_AWS_SECRET_ACCESS_KEY,
+    region: env.IP_ROTATE_AWS_REGION,
+  });
   return parsed.success ? parsed.config : undefined;
 };
 
@@ -177,6 +206,7 @@ export const fetchViaIpRotateForPlaywright = async (
     counters: params.counters,
     headers: {},
     method: METHOD_GET,
+    wallClockSignal: params.wallClockSignal,
   });
 
   return result.success ? result.response : result.lastResponse;
@@ -197,10 +227,12 @@ export const tryFetchWithIpRotate = async (
     return null;
   }
 
+  const wallClockSignal: AbortSignal = AbortSignal.timeout(WALL_CLOCK_TIMEOUT_MS);
   const response: Response | null = await fetchViaIpRotateForPlaywright({
     url,
     config: options.config,
     counters: options.counters,
+    wallClockSignal,
   });
 
   if (!response) {
