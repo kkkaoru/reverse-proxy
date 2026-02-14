@@ -5,12 +5,23 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   AUTH_TYPE_API_KEY,
   AUTH_TYPE_IAM,
+  extractRegionFromEndpoint,
+  filterEndpointsByBannedRegions,
   getNextEndpoint,
   isIpRotateTarget,
+  KV_KEY_IP_ROTATE_ENDPOINTS,
+  loadEndpointsJsonFromKv,
+  parseBannedRegions,
   parseIpRotateConfig,
+  pickRandomElement,
   rewriteUrlForIpRotate,
+  selectRegionAwareEndpoint,
 } from '../src/ip-rotate/client.ts';
-import type { IpRotateConfig } from '../src/ip-rotate/types.ts';
+import type {
+  EndpointWithApiKey,
+  IpRotateConfig,
+  IpRotateEndpoints,
+} from '../src/ip-rotate/types.ts';
 
 const createTestConfig = (): IpRotateConfig => ({
   endpoints: {
@@ -314,4 +325,302 @@ describe('ip-rotate-client', () => {
       }
     });
   });
+});
+
+describe('extractRegionFromEndpoint', () => {
+  test('should extract region from standard API Gateway endpoint', () => {
+    expect(
+      extractRegionFromEndpoint('https://abc123.execute-api.us-east-1.amazonaws.com/proxy'),
+    ).toBe('us-east-1');
+  });
+
+  test('should extract region from eu-west-1 endpoint', () => {
+    expect(
+      extractRegionFromEndpoint('https://def456.execute-api.eu-west-1.amazonaws.com/proxy'),
+    ).toBe('eu-west-1');
+  });
+
+  test('should extract region from ap-northeast-1 endpoint', () => {
+    expect(
+      extractRegionFromEndpoint('https://ghi789.execute-api.ap-northeast-1.amazonaws.com/proxy'),
+    ).toBe('ap-northeast-1');
+  });
+
+  test('should return null for non-API Gateway endpoint', () => {
+    expect(extractRegionFromEndpoint('https://example.com/proxy')).toBeNull();
+  });
+
+  test('should return null for empty string', () => {
+    expect(extractRegionFromEndpoint('')).toBeNull();
+  });
+});
+
+describe('selectRegionAwareEndpoint', () => {
+  beforeEach(() => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('should select endpoint from untried region first', () => {
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+      { endpoint: 'https://c.execute-api.ap-northeast-1.amazonaws.com/proxy', apiKey: 'key3' },
+    ];
+    const triedRegions = new Set<string>(['us-east-1']);
+    const triedEndpointIndices = new Set<number>([0]);
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).not.toBeNull();
+    expect(result?.region).toBe('eu-west-1');
+    expect(result?.index).toBe(1);
+  });
+
+  test('should select untried endpoint in tried region when all regions tried', () => {
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key2' },
+      { endpoint: 'https://c.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key3' },
+    ];
+    const triedRegions = new Set<string>(['us-east-1', 'eu-west-1']);
+    const triedEndpointIndices = new Set<number>([0, 2]);
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).not.toBeNull();
+    expect(result?.index).toBe(1);
+  });
+
+  test('should return null when all endpoints tried', () => {
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+    ];
+    const triedRegions = new Set<string>(['us-east-1', 'eu-west-1']);
+    const triedEndpointIndices = new Set<number>([0, 1]);
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).toBeNull();
+  });
+
+  test('should select first endpoint when nothing tried with Math.random=0', () => {
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+    ];
+    const triedRegions = new Set<string>();
+    const triedEndpointIndices = new Set<number>();
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).not.toBeNull();
+    expect(result?.index).toBe(0);
+    expect(result?.region).toBe('us-east-1');
+  });
+
+  test('should handle empty endpoints array', () => {
+    const endpoints: readonly EndpointWithApiKey[] = [];
+    const triedRegions = new Set<string>();
+    const triedEndpointIndices = new Set<number>();
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).toBeNull();
+  });
+
+  test('should prioritize untried region over untried endpoint in tried region', () => {
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key2' },
+      { endpoint: 'https://c.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key3' },
+    ];
+    const triedRegions = new Set<string>(['us-east-1']);
+    const triedEndpointIndices = new Set<number>([0]);
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).not.toBeNull();
+    expect(result?.region).toBe('eu-west-1');
+    expect(result?.index).toBe(2);
+  });
+
+  test('should select different region with different Math.random value', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+      { endpoint: 'https://c.execute-api.ap-northeast-1.amazonaws.com/proxy', apiKey: 'key3' },
+    ];
+    const triedRegions = new Set<string>();
+    const triedEndpointIndices = new Set<number>();
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).not.toBeNull();
+    expect(result?.index).toBe(2);
+    expect(result?.region).toBe('ap-northeast-1');
+  });
+
+  test('should select different untried endpoint with different Math.random value', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const endpoints: readonly EndpointWithApiKey[] = [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key2' },
+      { endpoint: 'https://c.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key3' },
+    ];
+    const triedRegions = new Set<string>(['us-east-1']);
+    const triedEndpointIndices = new Set<number>([0]);
+    const result = selectRegionAwareEndpoint({ endpoints, triedRegions, triedEndpointIndices });
+    expect(result).not.toBeNull();
+    expect(result?.index).toBe(2);
+  });
+});
+
+test('pickRandomElement should return undefined for empty array', () => {
+  expect(pickRandomElement([])).toBeUndefined();
+});
+
+test('pickRandomElement should return the only element for single-element array', () => {
+  expect(pickRandomElement(['only'])).toBe('only');
+});
+
+test('pickRandomElement should return element based on Math.random', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  expect(pickRandomElement(['a', 'b', 'c'])).toBe('b');
+  vi.restoreAllMocks();
+});
+
+test('pickRandomElement should return first element when Math.random is 0', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  expect(pickRandomElement(['a', 'b', 'c'])).toBe('a');
+  vi.restoreAllMocks();
+});
+
+test('pickRandomElement should return last element when Math.random is 0.99', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.99);
+  expect(pickRandomElement(['a', 'b', 'c'])).toBe('c');
+  vi.restoreAllMocks();
+});
+
+test('KV_KEY_IP_ROTATE_ENDPOINTS should be ip-rotate-endpoints', () => {
+  expect(KV_KEY_IP_ROTATE_ENDPOINTS).toBe('ip-rotate-endpoints');
+});
+
+describe('loadEndpointsJsonFromKv', () => {
+  test('should return null when KV is undefined', async () => {
+    const result = await loadEndpointsJsonFromKv(undefined);
+    expect(result).toBeNull();
+  });
+
+  test('should return null when KV returns null', async () => {
+    const mockKV = { get: vi.fn().mockResolvedValue(null) };
+    const result = await loadEndpointsJsonFromKv(mockKV as unknown as KVNamespace);
+    expect(result).toBeNull();
+    expect(mockKV.get).toHaveBeenCalledWith('ip-rotate-endpoints', 'text');
+  });
+
+  test('should return JSON string from KV', async () => {
+    const endpointsJson =
+      '{"example.com":[{"endpoint":"https://api1.example.com","apiKey":"key1"}]}';
+    const mockKV = { get: vi.fn().mockResolvedValue(endpointsJson) };
+    const result = await loadEndpointsJsonFromKv(mockKV as unknown as KVNamespace);
+    expect(result).toBe(
+      '{"example.com":[{"endpoint":"https://api1.example.com","apiKey":"key1"}]}',
+    );
+    expect(mockKV.get).toHaveBeenCalledWith('ip-rotate-endpoints', 'text');
+  });
+});
+
+test('parseBannedRegions returns empty set for undefined', () => {
+  const result: ReadonlySet<string> = parseBannedRegions(undefined);
+  expect(result.size).toBe(0);
+});
+
+test('parseBannedRegions returns empty set for empty string', () => {
+  const result: ReadonlySet<string> = parseBannedRegions('');
+  expect(result.size).toBe(0);
+});
+
+test('parseBannedRegions parses comma-separated regions', () => {
+  const result: ReadonlySet<string> = parseBannedRegions('eu-west-1,eu-west-2,eu-central-1');
+  expect(result.size).toBe(3);
+  expect(result.has('eu-west-1')).toBe(true);
+  expect(result.has('eu-west-2')).toBe(true);
+  expect(result.has('eu-central-1')).toBe(true);
+});
+
+test('parseBannedRegions trims whitespace around regions', () => {
+  const result: ReadonlySet<string> = parseBannedRegions(' eu-west-1 , eu-west-2 ');
+  expect(result.size).toBe(2);
+  expect(result.has('eu-west-1')).toBe(true);
+  expect(result.has('eu-west-2')).toBe(true);
+});
+
+test('parseBannedRegions ignores empty segments from extra commas', () => {
+  const result: ReadonlySet<string> = parseBannedRegions('eu-west-1,,eu-west-2,');
+  expect(result.size).toBe(2);
+  expect(result.has('eu-west-1')).toBe(true);
+  expect(result.has('eu-west-2')).toBe(true);
+});
+
+test('filterEndpointsByBannedRegions removes EU endpoints', () => {
+  const endpoints: IpRotateEndpoints = {
+    'example.com': [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+      { endpoint: 'https://c.execute-api.ap-northeast-1.amazonaws.com/proxy', apiKey: 'key3' },
+    ],
+  };
+  const banned: ReadonlySet<string> = new Set(['eu-west-1']);
+  const result: IpRotateEndpoints = filterEndpointsByBannedRegions(endpoints, banned);
+  expect(result['example.com']).toHaveLength(2);
+  expect(result['example.com']?.[0]?.apiKey).toBe('key1');
+  expect(result['example.com']?.[1]?.apiKey).toBe('key3');
+});
+
+test('filterEndpointsByBannedRegions preserves non-banned endpoints', () => {
+  const endpoints: IpRotateEndpoints = {
+    'example.com': [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.us-west-2.amazonaws.com/proxy', apiKey: 'key2' },
+    ],
+  };
+  const banned: ReadonlySet<string> = new Set(['eu-west-1']);
+  const result: IpRotateEndpoints = filterEndpointsByBannedRegions(endpoints, banned);
+  expect(result['example.com']).toHaveLength(2);
+});
+
+test('filterEndpointsByBannedRegions returns empty array when all banned', () => {
+  const endpoints: IpRotateEndpoints = {
+    'example.com': [
+      { endpoint: 'https://a.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-2.amazonaws.com/proxy', apiKey: 'key2' },
+    ],
+  };
+  const banned: ReadonlySet<string> = new Set(['eu-west-1', 'eu-west-2']);
+  const result: IpRotateEndpoints = filterEndpointsByBannedRegions(endpoints, banned);
+  expect(result['example.com']).toHaveLength(0);
+});
+
+test('filterEndpointsByBannedRegions preserves non-API-Gateway endpoints', () => {
+  const endpoints: IpRotateEndpoints = {
+    'example.com': [
+      { endpoint: 'https://custom-proxy.example.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+    ],
+  };
+  const banned: ReadonlySet<string> = new Set(['eu-west-1']);
+  const result: IpRotateEndpoints = filterEndpointsByBannedRegions(endpoints, banned);
+  expect(result['example.com']).toHaveLength(1);
+  expect(result['example.com']?.[0]?.apiKey).toBe('key1');
+});
+
+test('filterEndpointsByBannedRegions filters across multiple domains', () => {
+  const endpoints: IpRotateEndpoints = {
+    'example.com': [
+      { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+      { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+    ],
+    'other.com': [
+      { endpoint: 'https://c.execute-api.eu-west-2.amazonaws.com/proxy', apiKey: 'key3' },
+      { endpoint: 'https://d.execute-api.ap-northeast-1.amazonaws.com/proxy', apiKey: 'key4' },
+    ],
+  };
+  const banned: ReadonlySet<string> = new Set(['eu-west-1', 'eu-west-2']);
+  const result: IpRotateEndpoints = filterEndpointsByBannedRegions(endpoints, banned);
+  expect(result['example.com']).toHaveLength(1);
+  expect(result['example.com']?.[0]?.apiKey).toBe('key1');
+  expect(result['other.com']).toHaveLength(1);
+  expect(result['other.com']?.[0]?.apiKey).toBe('key4');
 });
