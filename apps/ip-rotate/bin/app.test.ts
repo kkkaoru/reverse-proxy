@@ -8,10 +8,12 @@ import {
   buildStackConfigsForDomain,
   buildStackId,
   createAllStacks,
+  createGatewayIndices,
   createStackForDomainRegion,
   createStackProps,
   getEnvOrContext,
   parseConfig,
+  parseGatewayPerRegion,
   parseProtocol,
   parseSingleDomain,
   parseTargetDomains,
@@ -183,15 +185,69 @@ describe('sanitizeHostForStackId', () => {
   });
 });
 
+describe('parseGatewayPerRegion', () => {
+  test('should return 1 for undefined', () => {
+    expect(parseGatewayPerRegion(undefined)).toBe(1);
+  });
+
+  test('should return 1 for empty string', () => {
+    expect(parseGatewayPerRegion('')).toBe(1);
+  });
+
+  test('should return 3 for "3"', () => {
+    expect(parseGatewayPerRegion('3')).toBe(3);
+  });
+
+  test('should return 1 for "0" (clamp to min)', () => {
+    expect(parseGatewayPerRegion('0')).toBe(1);
+  });
+
+  test('should return 1 for negative value', () => {
+    expect(parseGatewayPerRegion('-5')).toBe(1);
+  });
+
+  test('should return 1 for non-numeric string', () => {
+    expect(parseGatewayPerRegion('abc')).toBe(1);
+  });
+
+  test('should return 10 for "10"', () => {
+    expect(parseGatewayPerRegion('10')).toBe(10);
+  });
+});
+
+describe('createGatewayIndices', () => {
+  test('should return [1] for count 1', () => {
+    expect(createGatewayIndices(1)).toStrictEqual([1]);
+  });
+
+  test('should return [1, 2, 3] for count 3', () => {
+    expect(createGatewayIndices(3)).toStrictEqual([1, 2, 3]);
+  });
+
+  test('should return empty array for count 0', () => {
+    expect(createGatewayIndices(0)).toStrictEqual([]);
+  });
+});
+
 describe('buildStackId', () => {
-  test('should build stack ID with prefix, host and region', () => {
-    const result = buildStackId('api.example.com', 'us-east-1');
-    expect(result).toBe('IpRotate-api-example-com-us-east-1');
+  test('should build stack ID with prefix, host, region and gateway index', () => {
+    const result = buildStackId('api.example.com', 'us-east-1', 1);
+    expect(result).toBe('IpRotate-api-example-com-us-east-1-gw1');
   });
 
   test('should sanitize host in stack ID', () => {
-    const result = buildStackId('api_test.example.com:8080', 'eu-west-1');
-    expect(result).toBe('IpRotate-apitest-example-com8080-eu-west-1');
+    const result = buildStackId('api_test.example.com:8080', 'eu-west-1', 1);
+    expect(result).toBe('IpRotate-apitest-example-com8080-eu-west-1-gw1');
+  });
+
+  test('should include gateway index 2', () => {
+    const result = buildStackId('api.example.com', 'us-east-1', 2);
+    expect(result).toBe('IpRotate-api-example-com-us-east-1-gw2');
+  });
+
+  test('should include gateway index 3', () => {
+    const result = buildStackId('api.example.com', 'ap-northeast-1', 3);
+    expect(result).toBe('IpRotate-api-example-com-ap-northeast-1-gw3');
   });
 });
 
@@ -260,6 +316,7 @@ describe('parseConfig', () => {
     'REGIONS',
     'STAGE_NAME',
     'AUTH_TYPE',
+    'API_GATEWAY_PER_REGION',
   ];
 
   beforeEach(() => {
@@ -280,6 +337,7 @@ describe('parseConfig', () => {
     envHelper.set('REGIONS', 'us-east-1');
     envHelper.set('STAGE_NAME', 'test');
     envHelper.set('AUTH_TYPE', 'iam');
+    envHelper.set('API_GATEWAY_PER_REGION', '3');
 
     const app = new App();
     const result = parseConfig(app);
@@ -289,6 +347,7 @@ describe('parseConfig', () => {
     expect(result.regions).toStrictEqual(['us-east-1']);
     expect(result.stageName).toBe('test');
     expect(result.authType).toBe('iam');
+    expect(result.gatewayPerRegion).toBe(3);
   });
 
   test('should use default values when env vars not set', () => {
@@ -299,6 +358,7 @@ describe('parseConfig', () => {
     expect(result.domains).toStrictEqual([]);
     expect(result.stageName).toBe('proxy');
     expect(result.authType).toBe('api-key');
+    expect(result.gatewayPerRegion).toBe(1);
   });
 
   test('should use context values when env vars not set', () => {
@@ -316,6 +376,7 @@ describe('parseConfig', () => {
     expect(result.regions).toStrictEqual(['eu-west-1']);
     expect(result.stageName).toBe('staging');
     expect(result.authType).toBe('iam');
+    expect(result.gatewayPerRegion).toBe(1);
   });
 });
 
@@ -327,6 +388,7 @@ describe('validateConfig', () => {
       regions: ['us-east-1'],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
     const result = validateConfig(config);
     expect(result).toStrictEqual({ valid: true });
@@ -339,6 +401,7 @@ describe('validateConfig', () => {
       regions: ['us-east-1'],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
     const result = validateConfig(config);
     expect(result).toStrictEqual({
@@ -355,6 +418,7 @@ describe('validateConfig', () => {
       regions: [],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
     const result = validateConfig(config);
     expect(result).toStrictEqual({
@@ -373,6 +437,7 @@ describe('createStackProps', () => {
       account: '123456789012',
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayIndex: 1,
     };
     const result = createStackProps(config);
 
@@ -391,6 +456,7 @@ describe('createStackProps', () => {
       account: '987654321098',
       stageName: 'staging',
       authType: 'iam',
+      gatewayIndex: 1,
     };
     const result = createStackProps(config);
 
@@ -403,7 +469,7 @@ describe('createStackProps', () => {
 });
 
 describe('buildStackConfigsForDomain', () => {
-  test('should build configs for single region', () => {
+  test('should build configs for single region with default gateway count', () => {
     const domain: TargetDomain = { protocol: 'https', host: 'api.example.com' };
     const config: ParsedConfig = {
       account: '123456789012',
@@ -411,6 +477,7 @@ describe('buildStackConfigsForDomain', () => {
       regions: ['us-east-1'],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
     const result = buildStackConfigsForDomain(domain, config);
 
@@ -422,18 +489,20 @@ describe('buildStackConfigsForDomain', () => {
         stageName: 'proxy',
         authType: 'api-key',
         apiKeyValue: undefined,
+        gatewayIndex: 1,
       },
     ]);
   });
 
-  test('should build configs for multiple regions', () => {
+  test('should build configs for multiple regions with default gateway count', () => {
     const domain: TargetDomain = { protocol: 'https', host: 'api.example.com' };
     const config: ParsedConfig = {
       account: '123456789012',
       domains: [domain],
-      regions: ['us-east-1', 'eu-west-1', 'ap-northeast-1'],
+      regions: ['us-east-1', 'eu-west-1'],
       stageName: 'prod',
       authType: 'iam',
+      gatewayPerRegion: 1,
     };
     const result = buildStackConfigsForDomain(domain, config);
 
@@ -445,6 +514,7 @@ describe('buildStackConfigsForDomain', () => {
         stageName: 'prod',
         authType: 'iam',
         apiKeyValue: undefined,
+        gatewayIndex: 1,
       },
       {
         domain: { protocol: 'https', host: 'api.example.com' },
@@ -453,16 +523,53 @@ describe('buildStackConfigsForDomain', () => {
         stageName: 'prod',
         authType: 'iam',
         apiKeyValue: undefined,
-      },
-      {
-        domain: { protocol: 'https', host: 'api.example.com' },
-        region: 'ap-northeast-1',
-        account: '123456789012',
-        stageName: 'prod',
-        authType: 'iam',
-        apiKeyValue: undefined,
+        gatewayIndex: 1,
       },
     ]);
+  });
+
+  test('should build configs for single region with 3 gateways per region', () => {
+    const domain: TargetDomain = { protocol: 'https', host: 'api.example.com' };
+    const config: ParsedConfig = {
+      account: '123456789012',
+      domains: [domain],
+      regions: ['us-east-1'],
+      stageName: 'proxy',
+      authType: 'api-key',
+      gatewayPerRegion: 3,
+    };
+    const result = buildStackConfigsForDomain(domain, config);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]?.gatewayIndex).toBe(1);
+    expect(result[1]?.gatewayIndex).toBe(2);
+    expect(result[2]?.gatewayIndex).toBe(3);
+    expect(result[0]?.region).toBe('us-east-1');
+    expect(result[1]?.region).toBe('us-east-1');
+    expect(result[2]?.region).toBe('us-east-1');
+  });
+
+  test('should build configs for 2 regions with 2 gateways per region', () => {
+    const domain: TargetDomain = { protocol: 'https', host: 'api.example.com' };
+    const config: ParsedConfig = {
+      account: '123456789012',
+      domains: [domain],
+      regions: ['us-east-1', 'eu-west-1'],
+      stageName: 'proxy',
+      authType: 'api-key',
+      gatewayPerRegion: 2,
+    };
+    const result = buildStackConfigsForDomain(domain, config);
+
+    expect(result).toHaveLength(4);
+    expect(result[0]?.region).toBe('us-east-1');
+    expect(result[0]?.gatewayIndex).toBe(1);
+    expect(result[1]?.region).toBe('us-east-1');
+    expect(result[1]?.gatewayIndex).toBe(2);
+    expect(result[2]?.region).toBe('eu-west-1');
+    expect(result[2]?.gatewayIndex).toBe(1);
+    expect(result[3]?.region).toBe('eu-west-1');
+    expect(result[3]?.gatewayIndex).toBe(2);
   });
 
   test('should return empty array for empty regions', () => {
@@ -473,6 +580,7 @@ describe('buildStackConfigsForDomain', () => {
       regions: [],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
     const result = buildStackConfigsForDomain(domain, config);
 
@@ -488,6 +596,7 @@ describe('buildStackConfigsForDomain', () => {
       stageName: 'proxy',
       authType: 'api-key',
       apiKeyValue: 'shared-api-key',
+      gatewayPerRegion: 1,
     };
     const result = buildStackConfigsForDomain(domain, config);
 
@@ -499,6 +608,7 @@ describe('buildStackConfigsForDomain', () => {
         stageName: 'proxy',
         authType: 'api-key',
         apiKeyValue: 'shared-api-key',
+        gatewayIndex: 1,
       },
     ]);
   });
@@ -514,12 +624,13 @@ describe('createStackForDomainRegion', () => {
       account: '123456789012',
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayIndex: 1,
     };
 
     const result = createStackForDomainRegion(app, config);
 
     expect(result).toBeDefined();
-    expect(result.stackName).toBe('IpRotate-api-example-com-us-east-1');
+    expect(result.stackName).toBe('IpRotate-api-example-com-us-east-1-gw1');
   });
 
   test('should create stack with sanitized host in stack name', () => {
@@ -531,12 +642,31 @@ describe('createStackForDomainRegion', () => {
       account: '987654321098',
       stageName: 'staging',
       authType: 'iam',
+      gatewayIndex: 1,
     };
 
     const result = createStackForDomainRegion(app, config);
 
     expect(result).toBeDefined();
-    expect(result.stackName).toBe('IpRotate-api-test-example-com-eu-west-1');
+    expect(result.stackName).toBe('IpRotate-api-test-example-com-eu-west-1-gw1');
+  });
+
+  test('should include gateway index 2 in stack name', () => {
+    const app = new App();
+    const domain: TargetDomain = { protocol: 'https', host: 'api.example.com' };
+    const config: StackConfig = {
+      domain,
+      region: 'us-east-1',
+      account: '123456789012',
+      stageName: 'proxy',
+      authType: 'api-key',
+      gatewayIndex: 2,
+    };
+
+    const result = createStackForDomainRegion(app, config);
+
+    expect(result).toBeDefined();
+    expect(result.stackName).toBe('IpRotate-api-example-com-us-east-1-gw2');
   });
 });
 
@@ -549,12 +679,13 @@ describe('createAllStacks', () => {
       regions: ['us-east-1'],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
 
     const result = createAllStacks({ app, config });
 
     expect(result).toHaveLength(1);
-    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1');
+    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1-gw1');
   });
 
   test('should create stacks for single domain and multiple regions', () => {
@@ -565,13 +696,14 @@ describe('createAllStacks', () => {
       regions: ['us-east-1', 'eu-west-1'],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
 
     const result = createAllStacks({ app, config });
 
     expect(result).toHaveLength(2);
-    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1');
-    expect(result[1].stackName).toBe('IpRotate-api-example-com-eu-west-1');
+    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1-gw1');
+    expect(result[1].stackName).toBe('IpRotate-api-example-com-eu-west-1-gw1');
   });
 
   test('should create stacks for multiple domains and multiple regions', () => {
@@ -585,15 +717,56 @@ describe('createAllStacks', () => {
       regions: ['us-east-1', 'eu-west-1'],
       stageName: 'prod',
       authType: 'iam',
+      gatewayPerRegion: 1,
     };
 
     const result = createAllStacks({ app, config });
 
     expect(result).toHaveLength(4);
-    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1');
-    expect(result[1].stackName).toBe('IpRotate-api-example-com-eu-west-1');
-    expect(result[2].stackName).toBe('IpRotate-data-example-org-us-east-1');
-    expect(result[3].stackName).toBe('IpRotate-data-example-org-eu-west-1');
+    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1-gw1');
+    expect(result[1].stackName).toBe('IpRotate-api-example-com-eu-west-1-gw1');
+    expect(result[2].stackName).toBe('IpRotate-data-example-org-us-east-1-gw1');
+    expect(result[3].stackName).toBe('IpRotate-data-example-org-eu-west-1-gw1');
+  });
+
+  test('should create stacks with multiple gateways per region', () => {
+    const app = new App();
+    const config: ParsedConfig = {
+      account: '123456789012',
+      domains: [{ protocol: 'https', host: 'api.example.com' }],
+      regions: ['us-east-1'],
+      stageName: 'proxy',
+      authType: 'api-key',
+      gatewayPerRegion: 2,
+    };
+
+    const result = createAllStacks({ app, config });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1-gw1');
+    expect(result[1].stackName).toBe('IpRotate-api-example-com-us-east-1-gw2');
+  });
+
+  test('should create stacks for 2 regions with 3 gateways each', () => {
+    const app = new App();
+    const config: ParsedConfig = {
+      account: '123456789012',
+      domains: [{ protocol: 'https', host: 'api.example.com' }],
+      regions: ['us-east-1', 'eu-west-1'],
+      stageName: 'proxy',
+      authType: 'api-key',
+      gatewayPerRegion: 3,
+    };
+
+    const result = createAllStacks({ app, config });
+
+    expect(result).toHaveLength(6);
+    expect(result[0].stackName).toBe('IpRotate-api-example-com-us-east-1-gw1');
+    expect(result[1].stackName).toBe('IpRotate-api-example-com-us-east-1-gw2');
+    expect(result[2].stackName).toBe('IpRotate-api-example-com-us-east-1-gw3');
+    expect(result[3].stackName).toBe('IpRotate-api-example-com-eu-west-1-gw1');
+    expect(result[4].stackName).toBe('IpRotate-api-example-com-eu-west-1-gw2');
+    expect(result[5].stackName).toBe('IpRotate-api-example-com-eu-west-1-gw3');
   });
 
   test('should return empty array for empty domains', () => {
@@ -604,6 +777,7 @@ describe('createAllStacks', () => {
       regions: ['us-east-1'],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
 
     const result = createAllStacks({ app, config });
@@ -619,6 +793,7 @@ describe('createAllStacks', () => {
       regions: [],
       stageName: 'proxy',
       authType: 'api-key',
+      gatewayPerRegion: 1,
     };
 
     const result = createAllStacks({ app, config });
