@@ -18,6 +18,8 @@ export interface ProxyCacheEnv {
   IP_ROTATE_AWS_ACCESS_KEY_ID?: string;
   IP_ROTATE_AWS_SECRET_ACCESS_KEY?: string;
   IP_ROTATE_AWS_REGION?: string;
+  IP_ROTATE_BANNED_REGIONS?: string;
+  DEFAULT_TIMEOUT_MS?: string;
 }
 
 // Internal interfaces
@@ -28,6 +30,7 @@ export interface ProxyCacheOptions {
   cacheVersion: string;
   ipRotateConfig?: IpRotateConfig;
   ipRotateCounters: Map<string, number>;
+  defaultTimeoutMs?: string;
 }
 
 export interface CachedContent {
@@ -79,6 +82,8 @@ export interface IpRotateFetchParams {
   readonly headers: Record<string, string>;
   readonly config: IpRotateConfig;
   readonly counters: Map<string, number>;
+  readonly envDefaultTimeoutMs?: string;
+  readonly wallClockSignal?: AbortSignal;
 }
 
 export interface IpRotateFetchResult {

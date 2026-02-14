@@ -59,6 +59,13 @@ export const STATUS_BAD_GATEWAY: number = 502;
 export const MAX_REDIRECTS: number = 10;
 export const ERROR_BODY_SLICE_LENGTH: number = 500;
 
+// Wall clock timeout for fetch operations
+// Cloudflare Connection Limits (https://developers.cloudflare.com/fundamentals/reference/connection-limits/):
+//   - Proxy Read Timeout: 120s (Error 524) - binding constraint for HTTP response wait
+//   - TCP ACK Timeout: 90s (Error 522) - TCP-level ACK, not HTTP response (OS handles automatically)
+// 100s provides 20s safety margin below the 120s Proxy Read Timeout
+export const WALL_CLOCK_TIMEOUT_MS: number = 100000;
+
 // Error messages
 export const ERROR_MISSING_URL: string = 'Query parameter "url" is required.';
 export const ERROR_INVALID_URL: string = 'Query parameter "url" must be a valid absolute URL.';
@@ -118,6 +125,7 @@ export const ERROR_PRIVATE_IP: string = 'Access to private IP addresses is not a
 export const ERROR_INVALID_BODY: string = 'Request body must be valid JSON';
 export const ERROR_MISSING_URLS: string = 'Request body must contain "urls" array';
 export const ERROR_FETCH_FAILED: string = 'Fetch failed';
+export const ERROR_WALL_CLOCK_TIMEOUT: string = 'Wall clock timeout exceeded';
 
 // HTTP Status codes (batch)
 export const STATUS_UNPROCESSABLE_ENTITY: number = 422;
@@ -126,9 +134,9 @@ export const STATUS_UNPROCESSABLE_ENTITY: number = 422;
 export const MAX_MEMORY_BYTES: number = 100 * 1024 * 1024; // 100MB (128MB Worker limit - 28MB margin)
 export const MAX_SUBREQUESTS: number = 1000; // Workers Paid subrequest limit
 
-// Batch result statuses (typed as literal for BatchResultStatus compatibility)
-export const RESULT_SUCCESS: 'success' = 'success';
-export const RESULT_ERROR: 'error' = 'error';
-export const RESULT_SSRF_BLOCKED: 'ssrf_blocked' = 'ssrf_blocked';
-export const RESULT_SKIPPED: 'skipped' = 'skipped';
-export const RESULT_CACHE_HIT: 'cache_hit' = 'cache_hit';
+// Batch result statuses
+export const RESULT_SUCCESS = 'success';
+export const RESULT_ERROR = 'error';
+export const RESULT_SSRF_BLOCKED = 'ssrf_blocked';
+export const RESULT_SKIPPED = 'skipped';
+export const RESULT_CACHE_HIT = 'cache_hit';

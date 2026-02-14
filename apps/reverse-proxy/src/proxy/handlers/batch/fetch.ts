@@ -15,6 +15,7 @@ import {
   STATUS_CLIENT_ERROR_START,
   STATUS_OK,
   STATUS_UNPROCESSABLE_ENTITY,
+  WALL_CLOCK_TIMEOUT_MS,
 } from '../../constants.ts';
 import { performFetch } from '../../fetch/core.ts';
 import { buildFetchHeaders } from '../../fetch/headers.ts';
@@ -102,7 +103,13 @@ export const fetchSingleUrl = async (params: SingleFetchParams): Promise<BatchFe
   const headers: Record<string, string> = buildFetchHeaders(validation.url.origin);
 
   try {
-    const response: Response = await performFetch(params.options, params.url, headers);
+    const wallClockSignal: AbortSignal = AbortSignal.timeout(WALL_CLOCK_TIMEOUT_MS);
+    const response: Response = await performFetch({
+      options: params.options,
+      currentUrl: params.url,
+      headers,
+      wallClockSignal,
+    });
     const converted: Response = await convertResponseToUtf8(response);
     const body: string = await converted.text();
     const contentType: string = converted.headers.get(HEADER_CONTENT_TYPE) ?? '';
