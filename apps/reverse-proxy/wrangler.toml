@@ -16,13 +16,17 @@ API_DOMAIN = "${API_DOMAIN}"
 # Cache API control (optional, default: false)
 ENABLE_CACHE_API = "${ENABLE_CACHE_API}"
 # IP Rotate configuration (optional)
-# Note: For production, consider using `wrangler secret put` for sensitive values
-IP_ROTATE_ENDPOINTS = '${IP_ROTATE_ENDPOINTS}'
+# Note: IP_ROTATE_ENDPOINTS is stored in KV (use `bun run upload-endpoints`)
+# For production, consider using `wrangler secret put` for sensitive values
 IP_ROTATE_AUTH_TYPE = "${IP_ROTATE_AUTH_TYPE}"
 IP_ROTATE_API_KEY = "${IP_ROTATE_API_KEY}"
 IP_ROTATE_AWS_ACCESS_KEY_ID = "${IP_ROTATE_AWS_ACCESS_KEY_ID}"
 IP_ROTATE_AWS_SECRET_ACCESS_KEY = "${IP_ROTATE_AWS_SECRET_ACCESS_KEY}"
 IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
+# Banned regions for IP rotation (comma-separated, e.g. "eu-west-1,eu-west-2")
+IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
+# Default fetch timeout in milliseconds (optional, default: 2000)
+DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
 
 [observability.logs]
 enabled = true
