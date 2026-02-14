@@ -21,9 +21,40 @@ import {
   findOutputValue,
   formatEndpointsJson,
   groupEndpointsByDomain,
+  isGatewayIndexSuffix,
   parseDescribeStacksOutput,
   parseStackName,
 } from './export-endpoints.ts';
+
+describe('isGatewayIndexSuffix', () => {
+  test('should return true for gw1', () => {
+    expect(isGatewayIndexSuffix('gw1')).toBe(true);
+  });
+
+  test('should return true for gw2', () => {
+    expect(isGatewayIndexSuffix('gw2')).toBe(true);
+  });
+
+  test('should return true for gw10', () => {
+    expect(isGatewayIndexSuffix('gw10')).toBe(true);
+  });
+
+  test('should return false for us', () => {
+    expect(isGatewayIndexSuffix('us')).toBe(false);
+  });
+
+  test('should return false for empty string', () => {
+    expect(isGatewayIndexSuffix('')).toBe(false);
+  });
+
+  test('should return false for gw without number', () => {
+    expect(isGatewayIndexSuffix('gw')).toBe(false);
+  });
+
+  test('should return false for 1 without gw prefix', () => {
+    expect(isGatewayIndexSuffix('1')).toBe(false);
+  });
+});
 
 describe('parseStackName', () => {
   test('should parse valid stack name with single domain part', () => {
@@ -60,6 +91,20 @@ describe('parseStackName', () => {
     const result: StackNameResult = parseStackName('IpRotate-');
     expect(result).toStrictEqual({ valid: false, domain: '', region: '' });
   });
+
+  test('should parse valid stack name with gateway suffix gw1', () => {
+    const result: StackNameResult = parseStackName('IpRotate-api-example-com-us-east-1-gw1');
+    expect(result).toStrictEqual({ valid: true, domain: 'api.example.com', region: 'us-east-1' });
+  });
+
+  test('should parse valid stack name with gateway suffix gw3', () => {
+    const result: StackNameResult = parseStackName('IpRotate-api-example-com-ap-northeast-1-gw3');
+    expect(result).toStrictEqual({
+      valid: true,
+      domain: 'api.example.com',
+      region: 'ap-northeast-1',
+    });
+  });
 });
 
 describe('buildValidStackName', () => {
@@ -71,6 +116,16 @@ describe('buildValidStackName', () => {
   test('should return invalid for stack name with too few parts', () => {
     const result: StackNameResult = buildValidStackName('IpRotate-us-east-1');
     expect(result).toStrictEqual({ valid: false, domain: '', region: '' });
+  });
+
+  test('should strip gateway suffix and parse correctly', () => {
+    const result: StackNameResult = buildValidStackName('IpRotate-api-example-com-us-east-1-gw1');
+    expect(result).toStrictEqual({ valid: true, domain: 'api.example.com', region: 'us-east-1' });
+  });
+
+  test('should strip gateway suffix gw2 and parse correctly', () => {
+    const result: StackNameResult = buildValidStackName('IpRotate-data-test-org-eu-west-1-gw2');
+    expect(result).toStrictEqual({ valid: true, domain: 'data.test.org', region: 'eu-west-1' });
   });
 });
 
@@ -129,6 +184,29 @@ describe('parseDescribeStacksOutput', () => {
 });
 
 describe('extractStackEndpoint', () => {
+  test('should extract endpoint from stack with gateway suffix', () => {
+    const stack: StackDescription = {
+      StackName: 'IpRotate-api-example-com-us-east-1-gw1',
+      Outputs: [
+        {
+          OutputKey: 'ApiEndpoint',
+          OutputValue: 'https://abc123.execute-api.us-east-1.amazonaws.com/proxy',
+        },
+        {
+          OutputKey: 'ApiKeyId',
+          OutputValue: 'test-api-key-id',
+        },
+      ],
+    };
+    const result: StackEndpoint | null = extractStackEndpoint(stack);
+    expect(result).toStrictEqual({
+      domain: 'api.example.com',
+      endpoint: 'https://abc123.execute-api.us-east-1.amazonaws.com/proxy',
+      apiKeyId: 'test-api-key-id',
+      region: 'us-east-1',
+    });
+  });
+
   test('should extract endpoint from valid stack', () => {
     const stack: StackDescription = {
       StackName: 'IpRotate-api-example-com-us-east-1',

@@ -2,6 +2,8 @@
 // Export API Gateway endpoints to JSON for reverse-proxy configuration
 // Execute with bun: bun scripts/export-endpoints.ts
 
+import { ALL_REGIONS } from '../lib/regions.ts';
+
 // Interfaces at top
 interface StackOutput {
   readonly OutputKey: string;
@@ -66,13 +68,7 @@ const STACK_NAME_SEPARATOR = '-';
 const OUTPUT_KEY_API_ENDPOINT = 'ApiEndpoint';
 const OUTPUT_KEY_API_KEY_ID = 'ApiKeyId';
 const AWS_CLI_DESCRIBE_STACKS_BASE = 'aws cloudformation describe-stacks';
-const DEFAULT_REGIONS: readonly string[] = [
-  'ap-northeast-1',
-  'ap-northeast-2',
-  'ap-northeast-3',
-  'ap-east-1',
-  'ap-southeast-1',
-];
+const GATEWAY_INDEX_PATTERN = /^gw\d+$/;
 const AWS_CLI_GET_API_KEY = 'aws apigateway get-api-key --include-value --api-key';
 const MIN_STACK_NAME_PARTS = 4;
 const REGION_PARTS_COUNT = 3;
@@ -87,6 +83,8 @@ const INVALID_RESULT: InvalidStackName = {
 };
 
 // Pure functions
+const isGatewayIndexSuffix = (part: string): boolean => GATEWAY_INDEX_PATTERN.test(part);
+
 const runAwsCli = async (command: string): Promise<string> => {
   const proc = Bun.spawn(['sh', '-c', command], {
     stdout: 'pipe',
@@ -102,9 +100,15 @@ const parseDescribeStacksOutput = (output: string): DescribeStacksResponse => JS
 const findOutputValue = (outputs: readonly StackOutput[], key: string): string | undefined =>
   outputs.find((output: StackOutput): boolean => output.OutputKey === key)?.OutputValue;
 
+const stripGatewaySuffix = (parts: readonly string[]): readonly string[] => {
+  const lastPart: string | undefined = parts[parts.length - 1];
+  return lastPart && isGatewayIndexSuffix(lastPart) ? parts.slice(0, -1) : [...parts];
+};
+
 const buildValidStackName = (stackName: string): StackNameResult => {
   const withoutPrefix: string = stackName.slice(STACK_NAME_PREFIX.length);
-  const parts: readonly string[] = withoutPrefix.split(STACK_NAME_SEPARATOR);
+  const rawParts: readonly string[] = withoutPrefix.split(STACK_NAME_SEPARATOR);
+  const parts: readonly string[] = stripGatewaySuffix(rawParts);
   if (parts.length < MIN_STACK_NAME_PARTS) return INVALID_RESULT;
   const domainParts: readonly string[] = parts.slice(0, -REGION_PARTS_COUNT);
   const regionParts: readonly string[] = parts.slice(-REGION_PARTS_COUNT);
@@ -206,7 +210,7 @@ const fetchStacksFromAllRegions = async (
 const fetchAndCollectEndpoints = async (params: FetchEndpointsParams): Promise<EndpointsMap> => {
   const stacks: readonly StackDescription[] = await fetchStacksFromAllRegions(
     params.runCommand,
-    DEFAULT_REGIONS,
+    ALL_REGIONS,
   );
   return collectEndpointsWithApiKeys(stacks, params.runCommand);
 };
@@ -228,6 +232,7 @@ export {
   findOutputValue,
   formatEndpointsJson,
   groupEndpointsByDomain,
+  isGatewayIndexSuffix,
   parseDescribeStacksOutput,
   parseStackName,
 };
