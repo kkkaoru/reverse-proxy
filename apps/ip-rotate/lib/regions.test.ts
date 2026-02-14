@@ -7,8 +7,10 @@ import {
   createRegionConfig,
   DEFAULT_REGIONS,
   filterValidRegions,
+  isAllRegionsKeyword,
   isValidRegion,
   parseRegionsFromEnv,
+  REGIONS_ALL_KEYWORD,
 } from './regions.ts';
 
 describe('regions', () => {
@@ -35,8 +37,8 @@ describe('regions', () => {
   });
 
   describe('ALL_REGIONS', () => {
-    test('should have 17 regions', () => {
-      expect(ALL_REGIONS.length).toBe(17);
+    test('should have 34 regions', () => {
+      expect(ALL_REGIONS.length).toBe(34);
     });
 
     test('should include us-east-1', () => {
@@ -44,15 +46,15 @@ describe('regions', () => {
     });
 
     test('should include sa-east-1', () => {
-      expect(ALL_REGIONS[15]).toBe('sa-east-1');
+      expect(ALL_REGIONS[32]).toBe('sa-east-1');
     });
 
     test('should include ap-northeast-3', () => {
-      expect(ALL_REGIONS).toContain('ap-northeast-3');
+      expect(ALL_REGIONS[11]).toBe('ap-northeast-3');
     });
 
     test('should include ap-east-1', () => {
-      expect(ALL_REGIONS).toContain('ap-east-1');
+      expect(ALL_REGIONS[5]).toBe('ap-east-1');
     });
   });
 
@@ -65,6 +67,38 @@ describe('regions', () => {
     test('should return config with all regions', () => {
       const config = createRegionConfig();
       expect(config.allRegions).toStrictEqual(ALL_REGIONS);
+    });
+  });
+
+  describe('REGIONS_ALL_KEYWORD', () => {
+    test('should be ALL', () => {
+      expect(REGIONS_ALL_KEYWORD).toBe('ALL');
+    });
+  });
+
+  describe('isAllRegionsKeyword', () => {
+    test('should return true for ALL', () => {
+      expect(isAllRegionsKeyword('ALL')).toBe(true);
+    });
+
+    test('should return true for lowercase all', () => {
+      expect(isAllRegionsKeyword('all')).toBe(true);
+    });
+
+    test('should return true for ALL with spaces', () => {
+      expect(isAllRegionsKeyword(' ALL ')).toBe(true);
+    });
+
+    test('should return false for us-east-1', () => {
+      expect(isAllRegionsKeyword('us-east-1')).toBe(false);
+    });
+
+    test('should return false for empty string', () => {
+      expect(isAllRegionsKeyword('')).toBe(false);
+    });
+
+    test('should return true for mixed case All', () => {
+      expect(isAllRegionsKeyword('All')).toBe(true);
     });
   });
 
@@ -97,6 +131,22 @@ describe('regions', () => {
     test('should parse three regions', () => {
       const result = parseRegionsFromEnv('us-east-1,us-west-2,ap-northeast-1');
       expect(result).toStrictEqual(['us-east-1', 'us-west-2', 'ap-northeast-1']);
+    });
+
+    test('should return all 34 regions when ALL keyword is used', () => {
+      const result = parseRegionsFromEnv('ALL');
+      expect(result).toStrictEqual(ALL_REGIONS);
+      expect(result.length).toBe(34);
+    });
+
+    test('should return all regions when lowercase all keyword is used', () => {
+      const result = parseRegionsFromEnv('all');
+      expect(result).toStrictEqual(ALL_REGIONS);
+    });
+
+    test('should return all regions when ALL with spaces is used', () => {
+      const result = parseRegionsFromEnv(' ALL ');
+      expect(result).toStrictEqual(ALL_REGIONS);
     });
   });
 
