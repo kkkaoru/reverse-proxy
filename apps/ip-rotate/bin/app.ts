@@ -20,6 +20,7 @@ interface ParsedConfig {
   readonly stageName: string;
   readonly authType: string;
   readonly apiKeyValue?: string;
+  readonly gatewayPerRegion: number;
 }
 
 interface StackConfig {
@@ -29,6 +30,7 @@ interface StackConfig {
   readonly stageName: string;
   readonly authType: string;
   readonly apiKeyValue?: string;
+  readonly gatewayIndex: number;
 }
 
 interface EnvContextParams {
@@ -78,11 +80,15 @@ const PROTOCOL_HTTPS = 'https';
 const STACK_ID_PREFIX = 'IpRotate';
 const STACK_ID_SEPARATOR = '-';
 const HOST_DOT_REPLACEMENT = '-';
+const ENV_API_GATEWAY_PER_REGION = 'API_GATEWAY_PER_REGION';
+const DEFAULT_GATEWAY_PER_REGION = 1;
+const GATEWAY_INDEX_PREFIX = 'gw';
 const ERROR_MISSING_DOMAINS =
   'Error: TARGET_DOMAINS is required. Format: https:api.example.com,https:data.example.org';
 const ERROR_MISSING_REGIONS = 'Error: No valid regions specified.';
 const EXIT_CODE_ERROR = 1;
 const MIN_DOMAIN_PARTS = 2;
+const MIN_GATEWAY_PER_REGION = 1;
 
 // Pure functions
 const parseProtocol = (protocolStr: string): 'http' | 'https' =>
@@ -117,8 +123,19 @@ const parseTargetDomains = (domainsStr: string | undefined): readonly TargetDoma
 const sanitizeHostForStackId = (host: string): string =>
   host.replace(/\./g, HOST_DOT_REPLACEMENT).replace(/[^a-zA-Z0-9-]/g, '');
 
-const buildStackId = (host: string, region: string): string =>
-  `${STACK_ID_PREFIX}${STACK_ID_SEPARATOR}${sanitizeHostForStackId(host)}${STACK_ID_SEPARATOR}${region}`;
+const parseGatewayPerRegion = (envValue: string | undefined): number => {
+  if (!envValue) return DEFAULT_GATEWAY_PER_REGION;
+  const parsed: number = Number.parseInt(envValue, 10);
+  return Number.isNaN(parsed)
+    ? DEFAULT_GATEWAY_PER_REGION
+    : Math.max(parsed, MIN_GATEWAY_PER_REGION);
+};
+
+const createGatewayIndices = (count: number): readonly number[] =>
+  Array.from({ length: count }, (_: unknown, i: number): number => i + 1);
+
+const buildStackId = (host: string, region: string, gatewayIndex: number): string =>
+  `${STACK_ID_PREFIX}${STACK_ID_SEPARATOR}${sanitizeHostForStackId(host)}${STACK_ID_SEPARATOR}${region}${STACK_ID_SEPARATOR}${GATEWAY_INDEX_PREFIX}${gatewayIndex}`;
 
 const getEnvOrContext = (params: EnvContextParams): string | undefined =>
   process.env[params.envKey] ?? params.app.node.tryGetContext(params.contextKey);
@@ -146,8 +163,17 @@ const parseConfig = (app: App): ParsedConfig => {
   const domains: readonly TargetDomain[] = parseTargetDomains(domainsStr);
   const parsedRegions: readonly string[] = parseRegionsFromEnv(regionsStr);
   const validRegions: readonly string[] = filterValidRegions(parsedRegions);
+  const gatewayPerRegion: number = parseGatewayPerRegion(process.env[ENV_API_GATEWAY_PER_REGION]);
 
-  return { account, domains, regions: validRegions, stageName, authType, apiKeyValue };
+  return {
+    account,
+    domains,
+    regions: validRegions,
+    stageName,
+    authType,
+    apiKeyValue,
+    gatewayPerRegion,
+  };
 };
 
 const createStackProps = (config: StackConfig): IpRotateStackProps => ({
@@ -160,7 +186,7 @@ const createStackProps = (config: StackConfig): IpRotateStackProps => ({
 });
 
 const createStackForDomainRegion = (app: App, config: StackConfig): IpRotateStack => {
-  const stackId: string = buildStackId(config.domain.host, config.region);
+  const stackId: string = buildStackId(config.domain.host, config.region, config.gatewayIndex);
   const props: IpRotateStackProps = createStackProps(config);
   return new IpRotateStack(app, stackId, props);
 };
@@ -168,17 +194,22 @@ const createStackForDomainRegion = (app: App, config: StackConfig): IpRotateStac
 const buildStackConfigsForDomain = (
   domain: TargetDomain,
   config: ParsedConfig,
-): readonly StackConfig[] =>
-  config.regions.map(
-    (region: string): StackConfig => ({
-      domain,
-      region,
-      account: config.account,
-      stageName: config.stageName,
-      authType: config.authType,
-      apiKeyValue: config.apiKeyValue,
-    }),
+): readonly StackConfig[] => {
+  const gatewayIndices: readonly number[] = createGatewayIndices(config.gatewayPerRegion);
+  return config.regions.flatMap((region: string): readonly StackConfig[] =>
+    gatewayIndices.map(
+      (gatewayIndex: number): StackConfig => ({
+        domain,
+        region,
+        account: config.account,
+        stageName: config.stageName,
+        authType: config.authType,
+        apiKeyValue: config.apiKeyValue,
+        gatewayIndex,
+      }),
+    ),
   );
+};
 
 const createAllStacks = (params: CreateStacksParams): IpRotateStack[] =>
   params.config.domains
@@ -228,10 +259,12 @@ export {
   buildStackConfigsForDomain,
   buildStackId,
   createAllStacks,
+  createGatewayIndices,
   createStackForDomainRegion,
   createStackProps,
   getEnvOrContext,
   parseConfig,
+  parseGatewayPerRegion,
   parseProtocol,
   parseSingleDomain,
   parseTargetDomains,
