@@ -11,6 +11,7 @@ import type {
 import {
   clearModuleHealthCache,
   DO_INSTANCE_NAME,
+  inflightRequests,
   isModuleCacheFresh,
   MODULE_CACHE_TTL_MS,
   mergeHealthIntoCounters,
@@ -335,4 +336,115 @@ test('reportOutcomeToDO uses default instance name', async () => {
   await reportOutcomeToDO(params);
 
   expect(mockIdFromName).toHaveBeenCalledWith('default');
+});
+
+test('clearModuleHealthCache also clears inflightRequests', () => {
+  inflightRequests.set('example.com', Promise.resolve());
+  moduleHealthCache.set('example.com', { data: {}, cachedAt: Date.now() });
+
+  clearModuleHealthCache();
+
+  expect(inflightRequests.size).toBe(0);
+  expect(moduleHealthCache.size).toBe(0);
+});
+
+test('syncHealthToCounters single-flight coalesces concurrent DO requests', async () => {
+  const mockCacheMatch = vi.fn().mockResolvedValue(undefined);
+  const mockCachePut = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('caches', {
+    open: vi.fn().mockResolvedValue({ match: mockCacheMatch, put: mockCachePut }),
+  });
+
+  const doResult: DoHealthResult = {
+    counters: { 'ewma:example.com:0': 0.6 },
+    keyCount: 1,
+  };
+  mockGetHealthCounters.mockResolvedValue(doResult);
+
+  const namespace: MockDoNamespace = createMockNamespace();
+
+  const counters1: Map<string, number> = new Map();
+  const counters2: Map<string, number> = new Map();
+  const counters3: Map<string, number> = new Map();
+
+  const params1: SyncHealthParams = {
+    healthCoordinator: namespace as unknown as DurableObjectNamespace,
+    counters: counters1,
+    domain: 'example.com',
+    endpointCount: 3,
+  };
+  const params2: SyncHealthParams = {
+    healthCoordinator: namespace as unknown as DurableObjectNamespace,
+    counters: counters2,
+    domain: 'example.com',
+    endpointCount: 3,
+  };
+  const params3: SyncHealthParams = {
+    healthCoordinator: namespace as unknown as DurableObjectNamespace,
+    counters: counters3,
+    domain: 'example.com',
+    endpointCount: 3,
+  };
+
+  await Promise.all([
+    syncHealthToCounters(params1),
+    syncHealthToCounters(params2),
+    syncHealthToCounters(params3),
+  ]);
+
+  // DO should only be called once despite 3 concurrent requests
+  expect(mockGetHealthCounters).toHaveBeenCalledTimes(1);
+  // All counters should have the data
+  expect(counters1.get('ewma:example.com:0')).toBe(0.6);
+  expect(counters2.get('ewma:example.com:0')).toBe(0.6);
+  expect(counters3.get('ewma:example.com:0')).toBe(0.6);
+});
+
+test('syncHealthToCounters cleans up inflightRequests after completion', async () => {
+  const mockCacheMatch = vi.fn().mockResolvedValue(undefined);
+  const mockCachePut = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('caches', {
+    open: vi.fn().mockResolvedValue({ match: mockCacheMatch, put: mockCachePut }),
+  });
+
+  const doResult: DoHealthResult = {
+    counters: { 'ewma:example.com:0': 0.5 },
+    keyCount: 1,
+  };
+  mockGetHealthCounters.mockResolvedValue(doResult);
+
+  const namespace: MockDoNamespace = createMockNamespace();
+
+  const params: SyncHealthParams = {
+    healthCoordinator: namespace as unknown as DurableObjectNamespace,
+    counters: new Map(),
+    domain: 'example.com',
+    endpointCount: 3,
+  };
+
+  await syncHealthToCounters(params);
+
+  expect(inflightRequests.size).toBe(0);
+});
+
+test('syncHealthToCounters cleans up inflightRequests on DO error', async () => {
+  const mockCacheMatch = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('caches', {
+    open: vi.fn().mockResolvedValue({ match: mockCacheMatch, put: vi.fn() }),
+  });
+
+  mockGetHealthCounters.mockRejectedValue(new Error('DO unavailable'));
+
+  const namespace: MockDoNamespace = createMockNamespace();
+
+  const params: SyncHealthParams = {
+    healthCoordinator: namespace as unknown as DurableObjectNamespace,
+    counters: new Map(),
+    domain: 'example.com',
+    endpointCount: 3,
+  };
+
+  await syncHealthToCounters(params);
+
+  expect(inflightRequests.size).toBe(0);
 });
