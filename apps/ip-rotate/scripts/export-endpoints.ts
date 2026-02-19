@@ -2,7 +2,7 @@
 // Export API Gateway endpoints to JSON for reverse-proxy configuration
 // Execute with bun: bun scripts/export-endpoints.ts
 
-import { ALL_REGIONS } from '../lib/regions.ts';
+import { parseRegionsFromEnv } from '../lib/regions.ts';
 
 // Interfaces at top
 interface StackOutput {
@@ -210,7 +210,7 @@ const fetchStacksFromAllRegions = async (
 const fetchAndCollectEndpoints = async (params: FetchEndpointsParams): Promise<EndpointsMap> => {
   const stacks: readonly StackDescription[] = await fetchStacksFromAllRegions(
     params.runCommand,
-    ALL_REGIONS,
+    parseRegionsFromEnv(process.env.REGIONS),
   );
   return collectEndpointsWithApiKeys(stacks, params.runCommand);
 };

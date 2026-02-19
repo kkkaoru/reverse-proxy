@@ -1,0 +1,20 @@
+{
+  "version": "39.0.0",
+  "files": {
+    "e7bdb1652312c46363a29b061b0c3e82aa49da1548297efba72de80a0d8cd494": {
+      "source": {
+        "path": "IpRotate-nar-netkeiba-com-ap-southeast-5-gw1.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "303771181707-ap-southeast-5": {
+          "bucketName": "cdk-hnb659fds-assets-303771181707-ap-southeast-5",
+          "objectKey": "e7bdb1652312c46363a29b061b0c3e82aa49da1548297efba72de80a0d8cd494.json",
+          "region": "ap-southeast-5",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::303771181707:role/cdk-hnb659fds-file-publishing-role-303771181707-ap-southeast-5"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

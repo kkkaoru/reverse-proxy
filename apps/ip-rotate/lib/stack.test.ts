@@ -166,6 +166,19 @@ describe('IpRotateStack', () => {
     });
   });
 
+  describe('Binary media types', () => {
+    test('should configure binaryMediaTypes with wildcard', () => {
+      const app = createTestApp();
+      const props = createTestStackProps();
+      const stack = new IpRotateStack(app, 'TestStack', props);
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::ApiGateway::RestApi', {
+        BinaryMediaTypes: ['*/*'],
+      });
+    });
+  });
+
   describe('HTTP integration', () => {
     test('should configure HTTPS integration for https protocol', () => {
       const app = createTestApp();

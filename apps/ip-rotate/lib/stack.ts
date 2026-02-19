@@ -52,6 +52,7 @@ const INTEGRATION_PARAM_PROXY = 'integration.request.path.proxy';
 const OUTPUT_API_ENDPOINT = 'ApiEndpoint';
 const OUTPUT_API_ID = 'ApiId';
 const OUTPUT_API_KEY_ID = 'ApiKeyId';
+const BINARY_MEDIA_TYPE_ALL = '*/*';
 
 // Pure functions (guard pattern for early returns)
 const buildProxyIntegrationUrl = (params: CreateIntegrationParams): string =>
@@ -111,6 +112,7 @@ class IpRotateStack extends Stack {
     const api: RestApi = new RestApi(this, 'ProxyApi', {
       restApiName: buildApiName(this.region),
       endpointConfiguration: { types: [EndpointType.REGIONAL] },
+      binaryMediaTypes: [BINARY_MEDIA_TYPE_ALL],
       deployOptions: {
         stageName: props.stageName,
         accessLogDestination: new LogGroupLogDestination(accessLogGroup),

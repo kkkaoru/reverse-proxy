@@ -1,0 +1,20 @@
+{
+  "version": "39.0.0",
+  "files": {
+    "ffc47f26f6573c84d311ca7b76620efbb85f9835246b15d06aaf492265e91366": {
+      "source": {
+        "path": "IpRotate-www-netkeiba-com-eu-west-2-gw1.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "303771181707-eu-west-2": {
+          "bucketName": "cdk-hnb659fds-assets-303771181707-eu-west-2",
+          "objectKey": "ffc47f26f6573c84d311ca7b76620efbb85f9835246b15d06aaf492265e91366.json",
+          "region": "eu-west-2",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::303771181707:role/cdk-hnb659fds-file-publishing-role-303771181707-eu-west-2"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}
