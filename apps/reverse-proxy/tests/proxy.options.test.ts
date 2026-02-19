@@ -239,23 +239,30 @@ describe('createOptionsFromEnv', () => {
     expect(options.ipRotateConfig).toBe(ipRotateConfig);
   });
 
-  it('should pass defaultTimeoutMs from env', () => {
+  it('should pass tuning env from env', () => {
     const staticOptions: ProxyCacheStaticOptions = { enableLogging: true };
-    const env: ProxyCacheEnv = { DEFAULT_TIMEOUT_MS: '3000' };
+    const env: ProxyCacheEnv = {
+      DEFAULT_TIMEOUT_MS: '3000',
+      IP_ROTATE_HEALTH_TTL_MS: '120000',
+      IP_ROTATE_MAX_HEDGE_ATTEMPTS: '4',
+    };
     const counters = new Map<string, number>();
 
     const options = createOptionsFromEnv({ staticOptions, env, counters });
 
-    expect(options.defaultTimeoutMs).toBe('3000');
+    expect(options.ipRotateTuningEnv?.envDefaultTimeoutMs).toBe('3000');
+    expect(options.ipRotateTuningEnv?.envHealthTtlMs).toBe('120000');
+    expect(options.ipRotateTuningEnv?.envMaxHedgeAttempts).toBe('4');
   });
 
-  it('should leave defaultTimeoutMs undefined when not set', () => {
+  it('should leave tuning env fields undefined when not set', () => {
     const staticOptions: ProxyCacheStaticOptions = { enableLogging: true };
     const env: ProxyCacheEnv = {};
     const counters = new Map<string, number>();
 
     const options = createOptionsFromEnv({ staticOptions, env, counters });
 
-    expect(options.defaultTimeoutMs).toBeUndefined();
+    expect(options.ipRotateTuningEnv?.envDefaultTimeoutMs).toBeUndefined();
+    expect(options.ipRotateTuningEnv?.envHealthTtlMs).toBeUndefined();
   });
 });
