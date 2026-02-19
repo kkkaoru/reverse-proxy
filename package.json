@@ -11,20 +11,27 @@
     "typecheck": "bunx tsgo --project apps/reverse-proxy/tsconfig.json",
     "tsc": "bunx tsc --project tsconfig.json --noEmit",
     "lint": "bunx biome check .",
-    "lint:fix": "bunx biome check --write ."
+    "lint:fix": "bunx biome check --write .",
+    "biome": "bunx biome check ."
   },
   "devDependencies": {
+    "@aws-crypto/sha256-js": "5.2.0",
     "@biomejs/biome": "2.2.5",
     "@cloudflare/workers-types": "4.20260124.0",
+    "@smithy/signature-v4": "5.0.2",
     "@types/bun": "latest",
     "@typescript/native-preview": "7.0.0-dev.20251009.1",
     "@vitest/coverage-v8": "3.2.4",
+    "aws-cdk": "2.178.2",
+    "aws-cdk-lib": "2.178.2",
+    "constructs": "10.4.2",
     "typescript": "5.9.3",
     "vitest": "3.2.4",
     "wrangler": "4.42.1"
   },
   "dependencies": {
     "@cloudflare/playwright": "1.1.0",
+    "@noble/ed25519": "3.0.0",
     "drizzle-kit": "0.31.8",
     "drizzle-orm": "0.43.1",
     "hono": "4.9.10",

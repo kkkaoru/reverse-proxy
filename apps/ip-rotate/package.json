@@ -12,14 +12,5 @@
     "deploy": "bunx cdk deploy --all --require-approval never",
     "destroy": "bunx cdk destroy --all --force",
     "export": "bun scripts/export-endpoints.ts"
-  },
-  "devDependencies": {
-    "@aws-crypto/sha256-js": "5.2.0",
-    "@smithy/signature-v4": "5.0.2",
-    "@types/bun": "1.2.4",
-    "aws-cdk": "2.178.2",
-    "aws-cdk-lib": "2.178.2",
-    "constructs": "10.4.2",
-    "vitest": "3.0.4"
   }
 }

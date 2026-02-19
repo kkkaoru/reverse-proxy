@@ -7,18 +7,12 @@
     "setup": "./scripts/setup-wrangler.sh",
     "test": "bunx vitest run --config vitest.config.ts",
     "test:coverage": "bunx vitest run --coverage --config vitest.config.ts",
+    "tsc": "bunx tsc --noEmit",
     "typecheck": "bunx tsgo --project tsconfig.json",
+    "biome": "bunx biome check src tests vitest.config.ts",
     "lint": "bunx biome check src tests vitest.config.ts",
     "lint:fix": "bunx biome check --write src tests vitest.config.ts",
     "deploy": "./scripts/deploy.sh",
     "upload-endpoints": "./scripts/upload-endpoints-to-kv.sh"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "4.20251008.0"
-  },
-  "dependencies": {
-    "@aws-crypto/sha256-js": "5.2.0",
-    "@smithy/signature-v4": "5.0.2",
-    "iconv-lite": "0.7.2"
   }
 }
