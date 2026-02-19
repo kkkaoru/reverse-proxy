@@ -92,8 +92,8 @@ export const CACHE_TTL_SECONDS: number = 432000; // 5 days (86400 * 5)
 export const KV_CACHE_KEY_PREFIX: string = 'proxy';
 export const DEFAULT_CACHE_VERSION: string = 'v1';
 
-// Batch fetch
-export const MAX_CONCURRENT_REQUESTS: number = 6;
+// Batch fetch (3 URLs x 2 connections/hedge = 6 = Cloudflare simultaneous connection limit)
+export const MAX_CONCURRENT_REQUESTS: number = 3;
 
 // SSRF blocked hostnames
 export const BLOCKED_HOSTNAMES: readonly string[] = [
@@ -132,7 +132,7 @@ export const STATUS_UNPROCESSABLE_ENTITY: number = 422;
 
 // Resource limits (Cloudflare Workers Paid limits)
 export const MAX_MEMORY_BYTES: number = 100 * 1024 * 1024; // 100MB (128MB Worker limit - 28MB margin)
-export const MAX_SUBREQUESTS: number = 1000; // Workers Paid subrequest limit
+export const MAX_SUBREQUESTS: number = 10000; // Workers Paid plan default (2026/2/11+)
 
 // Batch result statuses
 export const RESULT_SUCCESS = 'success';
