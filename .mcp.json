@@ -8,19 +8,6 @@
       "command": "bunx",
       "args": ["@upstash/context7-mcp"]
     },
-    "serena": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "${SERENA_PATH}",
-        "serena",
-        "start-mcp-server"
-      ],
-      "env": {
-        "SERENA_PATH": "${SERENA_PATH}"
-      }
-    },
     "cloudflare": {
       "command": "bunx",
       "args": ["mcp-remote", "https://docs.mcp.cloudflare.com/mcp"]
