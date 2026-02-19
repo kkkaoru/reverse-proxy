@@ -57,7 +57,6 @@ interface TimeoutConfig {
   readonly defaultMs: number;
   readonly minMs: number;
   readonly maxMs: number;
-  readonly adjustmentMs: number;
 }
 
 interface FetchWithAuthParams {
@@ -79,6 +78,13 @@ interface FetchWithRetryParams {
   readonly timeoutMs?: number;
   readonly envDefaultTimeoutMs?: string;
   readonly wallClockSignal?: AbortSignal;
+  readonly envHealthTtlMs?: string;
+  readonly envEwmaHalfLifeMs?: string;
+  readonly envMaxHedgeAttempts?: string;
+  readonly envHedgeDelayMs?: string;
+  readonly envThrottleBaseDelayMs?: string;
+  readonly envThrottleTtlMs?: string;
+  readonly envHedgeSuppressThreshold?: string;
 }
 
 interface FetchWithRetryResult {
@@ -87,11 +93,15 @@ interface FetchWithRetryResult {
   readonly usedEndpoint: string;
 }
 
+type FetchRetryErrorCode = 'MAX_RETRIES' | 'WALL_CLOCK_TIMEOUT' | 'NO_ENDPOINTS';
+
 interface FetchWithRetryFailure {
   readonly success: false;
   readonly lastResponse: Response | null;
   readonly lastUsedEndpoint: string | null;
   readonly error: string;
+  readonly errorCode: FetchRetryErrorCode;
+  readonly totalAttempts: number;
 }
 
 type FetchRetryResult = FetchWithRetryResult | FetchWithRetryFailure;
@@ -132,10 +142,12 @@ interface SelectRegionAwareEndpointParams {
   readonly endpoints: readonly EndpointWithApiKey[];
   readonly triedRegions: ReadonlySet<string>;
   readonly triedEndpointIndices: ReadonlySet<number>;
+  readonly endpointWeights?: readonly number[];
 }
 
 export type {
   EndpointWithApiKey,
+  FetchRetryErrorCode,
   FetchRetryResult,
   FetchWithAuthParams,
   FetchWithRetryFailure,
