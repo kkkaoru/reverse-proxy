@@ -1,7 +1,25 @@
 {
   "permissions": {
     "allow": [
-      "mcp__cloudflare__search_cloudflare_documentation"
+      "mcp__cloudflare__search_cloudflare_documentation",
+      "WebSearch",
+      "mcp__serena__list_memories",
+      "mcp__serena__list_dir",
+      "mcp__serena__activate_project",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__read_file",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "Bash(bun run tsc:*)",
+      "Bash(bun run biome:*)",
+      "Bash(bun run test:*)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "chrome-devtools",
+    "context7",
+    "serena",
+    "cloudflare",
+    "awslabs.aws-documentation-mcp-server"
+  ]
 }
