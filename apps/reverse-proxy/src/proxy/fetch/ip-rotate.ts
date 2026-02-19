@@ -3,6 +3,7 @@
 
 import { isIpRotateTarget } from '../../ip-rotate/client.ts';
 import { fetchWithRetry } from '../../ip-rotate/fetch.ts';
+import { reportOutcomeToDO } from '../../ip-rotate/health-sync.ts';
 import type { FetchRetryResult } from '../../ip-rotate/types.ts';
 import { logEvent } from '../cache.ts';
 import { LOG_EVENT_IP_ROTATE, METHOD_GET } from '../constants.ts';
@@ -15,6 +16,29 @@ interface PerformIpRotateFetchParams {
   readonly wallClockSignal?: AbortSignal;
 }
 
+// Report outcome to Durable Object via waitUntil
+const reportOutcomeAsync = (params: PerformIpRotateFetchParams, result: FetchRetryResult): void => {
+  if (!(params.options.healthCoordinator && params.options.executionCtx)) return;
+
+  const isSuccess: boolean = result.success;
+  const status: number | undefined = result.success
+    ? result.response.status
+    : result.lastResponse?.status;
+  const isThrottle: boolean = status === 429;
+  const isServerError: boolean = (status ?? 0) >= 500;
+
+  params.options.executionCtx.waitUntil(
+    reportOutcomeToDO({
+      healthCoordinator: params.options.healthCoordinator,
+      domain: params.url.host,
+      index: 0,
+      isSuccess,
+      isThrottle,
+      isServerError,
+    }),
+  );
+};
+
 // Fetch via IP rotation with retry
 export const fetchViaIpRotate = async (
   ipRotateParams: IpRotateFetchParams,
@@ -25,8 +49,8 @@ export const fetchViaIpRotate = async (
     counters: ipRotateParams.counters,
     headers: ipRotateParams.headers,
     method: METHOD_GET,
-    envDefaultTimeoutMs: ipRotateParams.envDefaultTimeoutMs,
     wallClockSignal: ipRotateParams.wallClockSignal,
+    ...ipRotateParams.tuningEnv,
   });
 
   if (!result.success) {
@@ -54,24 +78,28 @@ export const performIpRotateFetch = async (
     return null;
   }
 
-  const ipRotateResult: IpRotateFetchResult | null = await fetchViaIpRotate({
-    url: params.url,
-    headers: params.headers,
+  const fetchResult: FetchRetryResult = await fetchWithRetry({
     config: params.options.ipRotateConfig,
+    targetUrl: params.url,
     counters: params.options.ipRotateCounters,
-    envDefaultTimeoutMs: params.options.defaultTimeoutMs,
+    headers: params.headers,
+    method: METHOD_GET,
     wallClockSignal: params.wallClockSignal,
+    ...params.options.ipRotateTuningEnv,
   });
 
-  if (!ipRotateResult) {
-    return null;
+  // Report outcome to Durable Object asynchronously
+  reportOutcomeAsync(params, fetchResult);
+
+  if (!fetchResult.success) {
+    return fetchResult.lastResponse ?? null;
   }
 
   logEvent(params.options, LOG_EVENT_IP_ROTATE, {
     target: params.url.toString(),
     ipRotateUrl: params.url.host,
-    ipRotateEndpoint: ipRotateResult.usedEndpoint,
+    ipRotateEndpoint: fetchResult.usedEndpoint,
   });
 
-  return ipRotateResult.response;
+  return fetchResult.response;
 };
