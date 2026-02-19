@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import {
+  ABSOLUTE_MAX_RETRIES,
   ACCEPT_ENCODING_IDENTITY,
   buildHealthKey,
   buildThrottleKey,
@@ -12,6 +13,7 @@ import {
   DEFAULT_HEDGE_DELAY_MS,
   DEFAULT_TIMEOUT_MS,
   defaultTimeoutConfig,
+  drainResponseBody,
   ERROR_ALL_ENDPOINTS_FAILED,
   ERROR_NO_ENDPOINTS_AVAILABLE,
   ERROR_WALL_CLOCK_TIMEOUT,
@@ -39,6 +41,7 @@ import {
   resolveTuning,
   STATUS_SERVER_ERROR_START,
   STATUS_TOO_MANY_REQUESTS,
+  STATUS_WORKER_RESOURCE_EXHAUSTED,
   stripCompressionEncoding,
   THROTTLE_BACKOFF_MULTIPLIER,
   THROTTLE_BASE_DELAY_MS,
@@ -155,6 +158,18 @@ test('isRetriableStatus false for 404', () => {
   expect(isRetriableStatus(404)).toBe(false);
 });
 
+test('STATUS_WORKER_RESOURCE_EXHAUSTED is 533', () => {
+  expect(STATUS_WORKER_RESOURCE_EXHAUSTED).toBe(533);
+});
+
+test('isRetriableStatus false for 533 (worker resource exhausted)', () => {
+  expect(isRetriableStatus(533)).toBe(false);
+});
+
+test('ABSOLUTE_MAX_RETRIES is 20', () => {
+  expect(ABSOLUTE_MAX_RETRIES).toBe(20);
+});
+
 test('isServerErrorStatus true for 500', () => {
   expect(isServerErrorStatus(500)).toBe(true);
 });
@@ -187,8 +202,12 @@ test('calculateMaxRetries for 10 endpoints returns 10', () => {
   expect(calculateMaxRetries(10)).toBe(10);
 });
 
-test('calculateMaxRetries for 51 endpoints returns 51', () => {
-  expect(calculateMaxRetries(51)).toBe(51);
+test('calculateMaxRetries for 25 endpoints returns 20 (capped)', () => {
+  expect(calculateMaxRetries(25)).toBe(20);
+});
+
+test('calculateMaxRetries for 51 endpoints returns 20 (capped)', () => {
+  expect(calculateMaxRetries(51)).toBe(20);
 });
 
 test('calculateMaxRetries for 1 endpoint returns min 5', () => {
@@ -1897,4 +1916,87 @@ test('fetchWithRetry returns 302 as success without following redirect', async (
     expect(result.response.status).toBe(302);
   }
   expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+});
+
+// 533 worker resource exhausted - not retried, returned as success immediately
+test('fetchWithRetry returns 533 as success without retry', async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(new Response('Resource Exhausted', { status: 533 }));
+
+  const result = await fetchWithRetry({
+    config: {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'key' },
+    },
+    targetUrl: new URL('https://example.com/path'),
+    counters: new Map(),
+    headers: {},
+    method: 'GET',
+  });
+
+  expect(result.success).toBe(true);
+  if (result.success) {
+    expect(result.response.status).toBe(533);
+  }
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+});
+
+// calculateMaxRetries capping with ABSOLUTE_MAX_RETRIES
+test('calculateMaxRetries for 20 endpoints returns 20', () => {
+  expect(calculateMaxRetries(20)).toBe(20);
+});
+
+test('calculateMaxRetries for 15 endpoints returns 15', () => {
+  expect(calculateMaxRetries(15)).toBe(15);
+});
+
+// drainResponseBody tests
+test('drainResponseBody calls body.cancel() on resolved response', async () => {
+  const cancelMock = vi.fn().mockResolvedValue(undefined);
+  const mockBody = { cancel: cancelMock } as unknown as ReadableStream<Uint8Array>;
+  const promise: Promise<{ response: Response | null; timedOut: boolean; usedEndpoint: string }> =
+    Promise.resolve({
+      response: { body: mockBody } as unknown as Response,
+      timedOut: false,
+      usedEndpoint: 'https://example.com',
+    });
+  drainResponseBody(promise);
+  await promise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(cancelMock).toHaveBeenCalledTimes(1);
+});
+
+test('drainResponseBody handles null response without throwing', async () => {
+  const promise: Promise<{ response: Response | null; timedOut: boolean; usedEndpoint: string }> =
+    Promise.resolve({
+      response: null,
+      timedOut: true,
+      usedEndpoint: 'https://example.com',
+    });
+  drainResponseBody(promise);
+  await promise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test('drainResponseBody handles response with null body without throwing', async () => {
+  const promise: Promise<{ response: Response | null; timedOut: boolean; usedEndpoint: string }> =
+    Promise.resolve({
+      response: { body: null } as unknown as Response,
+      timedOut: false,
+      usedEndpoint: 'https://example.com',
+    });
+  drainResponseBody(promise);
+  await promise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test('drainResponseBody handles rejected promise without throwing', async () => {
+  const promise: Promise<{ response: Response | null; timedOut: boolean; usedEndpoint: string }> =
+    Promise.reject(new Error('fetch failed'));
+  drainResponseBody(promise);
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
