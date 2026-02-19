@@ -9,7 +9,12 @@ import {
 } from '../ip-rotate/client.ts';
 import type { IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
 import { DEFAULT_CACHE_VERSION } from './constants.ts';
-import type { ProxyCacheEnv, ProxyCacheOptions, ProxyCacheStaticOptions } from './types.ts';
+import type {
+  IpRotateTuningEnv,
+  ProxyCacheEnv,
+  ProxyCacheOptions,
+  ProxyCacheStaticOptions,
+} from './types.ts';
 
 interface CreateOptionsParams {
   readonly staticOptions: ProxyCacheStaticOptions;
@@ -60,6 +65,18 @@ export const resolveIpRotateConfig = async (
   return parsed.success ? applyBannedRegionFilter(parsed.config, env) : undefined;
 };
 
+// Build tuning env from ProxyCacheEnv
+const buildTuningEnv = (env: ProxyCacheEnv): IpRotateTuningEnv => ({
+  envDefaultTimeoutMs: env.DEFAULT_TIMEOUT_MS,
+  envHealthTtlMs: env.IP_ROTATE_HEALTH_TTL_MS,
+  envEwmaHalfLifeMs: env.IP_ROTATE_EWMA_HALF_LIFE_MS,
+  envMaxHedgeAttempts: env.IP_ROTATE_MAX_HEDGE_ATTEMPTS,
+  envHedgeDelayMs: env.IP_ROTATE_HEDGE_DELAY_MS,
+  envThrottleBaseDelayMs: env.IP_ROTATE_THROTTLE_BASE_DELAY_MS,
+  envThrottleTtlMs: env.IP_ROTATE_THROTTLE_TTL_MS,
+  envHedgeSuppressThreshold: env.IP_ROTATE_HEDGE_SUPPRESS_THRESHOLD,
+});
+
 // Create options from environment
 export const createOptionsFromEnv = (params: CreateOptionsParams): ProxyCacheOptions => ({
   enableLogging: params.staticOptions.enableLogging,
@@ -68,5 +85,6 @@ export const createOptionsFromEnv = (params: CreateOptionsParams): ProxyCacheOpt
   cacheVersion: params.env.CACHE_VERSION ?? DEFAULT_CACHE_VERSION,
   ipRotateConfig: params.ipRotateConfig ?? parseIpRotateConfigFromEnv(params.env),
   ipRotateCounters: params.counters,
-  defaultTimeoutMs: params.env.DEFAULT_TIMEOUT_MS,
+  ipRotateTuningEnv: buildTuningEnv(params.env),
+  healthCoordinator: params.env.HEALTH_COORDINATOR,
 });

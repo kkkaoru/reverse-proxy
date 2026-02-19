@@ -9,6 +9,7 @@ export interface ReverseProxyBindings {
   KV?: KVNamespace;
   CACHE_VERSION?: string;
   ENABLE_CACHE_API?: string;
+  HEALTH_COORDINATOR?: DurableObjectNamespace;
 }
 
 // Hono app type with bindings

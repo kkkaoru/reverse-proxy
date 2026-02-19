@@ -20,6 +20,14 @@ export interface ProxyCacheEnv {
   IP_ROTATE_AWS_REGION?: string;
   IP_ROTATE_BANNED_REGIONS?: string;
   DEFAULT_TIMEOUT_MS?: string;
+  IP_ROTATE_HEALTH_TTL_MS?: string;
+  IP_ROTATE_EWMA_HALF_LIFE_MS?: string;
+  IP_ROTATE_MAX_HEDGE_ATTEMPTS?: string;
+  IP_ROTATE_HEDGE_DELAY_MS?: string;
+  IP_ROTATE_THROTTLE_BASE_DELAY_MS?: string;
+  IP_ROTATE_THROTTLE_TTL_MS?: string;
+  IP_ROTATE_HEDGE_SUPPRESS_THRESHOLD?: string;
+  HEALTH_COORDINATOR?: DurableObjectNamespace;
 }
 
 // Internal interfaces
@@ -30,7 +38,9 @@ export interface ProxyCacheOptions {
   cacheVersion: string;
   ipRotateConfig?: IpRotateConfig;
   ipRotateCounters: Map<string, number>;
-  defaultTimeoutMs?: string;
+  ipRotateTuningEnv?: IpRotateTuningEnv;
+  healthCoordinator?: DurableObjectNamespace;
+  executionCtx?: ExecutionContext;
 }
 
 export interface CachedContent {
@@ -77,13 +87,24 @@ export interface LogEventDetail {
   ipRotateEndpoint?: string;
 }
 
+export interface IpRotateTuningEnv {
+  readonly envDefaultTimeoutMs?: string;
+  readonly envHealthTtlMs?: string;
+  readonly envEwmaHalfLifeMs?: string;
+  readonly envMaxHedgeAttempts?: string;
+  readonly envHedgeDelayMs?: string;
+  readonly envThrottleBaseDelayMs?: string;
+  readonly envThrottleTtlMs?: string;
+  readonly envHedgeSuppressThreshold?: string;
+}
+
 export interface IpRotateFetchParams {
   readonly url: URL;
   readonly headers: Record<string, string>;
   readonly config: IpRotateConfig;
   readonly counters: Map<string, number>;
-  readonly envDefaultTimeoutMs?: string;
   readonly wallClockSignal?: AbortSignal;
+  readonly tuningEnv?: IpRotateTuningEnv;
 }
 
 export interface IpRotateFetchResult {
@@ -96,6 +117,7 @@ export interface LogUpstreamErrorParams {
   target: URL;
   currentUrl: string;
   response: Response;
+  enableLogging: boolean;
 }
 
 export interface ProcessFetchResponseParams {

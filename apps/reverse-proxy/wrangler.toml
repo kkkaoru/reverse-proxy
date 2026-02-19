@@ -1,3 +1,4 @@
+account_id = "${CLOUDFLARE_ACCOUNT_ID}"
 name = "reverse-proxy-queue"
 main = "src/index.ts"
 compatibility_date = "2025-10-09"
@@ -27,6 +28,20 @@ IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
 IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
 # Default fetch timeout in milliseconds (optional, default: 2000)
 DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
+# IP rotation tuning (all optional, shown with defaults)
+# IP_ROTATE_HEALTH_TTL_MS = "60000"
+# IP_ROTATE_EWMA_HALF_LIFE_MS = "30000"
+# IP_ROTATE_MAX_HEDGE_ATTEMPTS = "2"
+# IP_ROTATE_HEDGE_DELAY_MS = "500"
+# IP_ROTATE_THROTTLE_BASE_DELAY_MS = "100"
+
+[[durable_objects.bindings]]
+name = "HEALTH_COORDINATOR"
+class_name = "EndpointHealthCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["EndpointHealthCoordinator"]
 
 [observability.logs]
 enabled = true
