@@ -22,6 +22,9 @@ import {
 import { getResourceUsage, isApproachingLimit } from './resources.ts';
 import { fillNullResults } from './results.ts';
 
+// IP rotation uses retries + hedge per URL, so each URL consumes ~3 fetch() calls
+export const IP_ROTATE_FETCH_FACTOR: number = 3;
+
 // Create batch execution state
 export const createBatchExecutionState = (params: BatchFetchParams): BatchExecutionState => ({
   limits: { maxMemoryBytes: MAX_MEMORY_BYTES, maxSubrequests: MAX_SUBREQUESTS },
@@ -31,9 +34,10 @@ export const createBatchExecutionState = (params: BatchFetchParams): BatchExecut
   options: params.options,
 });
 
-// Calculate subrequest count
+// Calculate subrequest count (multiplied by fetch factor for IP rotation retries + hedge)
 export const calculateSubrequestCount = (params: LoopIterationParams): number =>
-  params.urlCount - params.state.queue.length + params.state.retried.size;
+  (params.urlCount - params.state.queue.length + params.state.retried.size) *
+  IP_ROTATE_FETCH_FACTOR;
 
 // Check if should stop execution
 export const shouldStopExecution = (params: LoopIterationParams): boolean => {
