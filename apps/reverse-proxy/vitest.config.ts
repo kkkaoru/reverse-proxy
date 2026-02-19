@@ -30,6 +30,8 @@ export default defineConfig({
         'src/ip-rotate/health-coordinator.ts', // Durable Object class requires Workers runtime
         'src/**/types.ts', // Type-only files with no runtime code
         'src/types/**', // Type-only directory
+        'tests/helpers.ts', // Test utility functions, not production code
+        'tests/__mocks__/**', // Test mocks for Cloudflare Workers runtime APIs
       ],
       thresholds: {
         statements: 80,
