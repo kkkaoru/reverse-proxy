@@ -143,7 +143,9 @@ const TIMEOUT_MESSAGE_PATTERN: RegExp = /timeout/i;
 // Retry logic constants
 const STATUS_SERVER_ERROR_START: number = 500;
 const STATUS_TOO_MANY_REQUESTS: number = 429;
+const STATUS_WORKER_RESOURCE_EXHAUSTED: number = 533;
 const MIN_RETRIES: number = 5;
+const ABSOLUTE_MAX_RETRIES: number = 20;
 const ERROR_ALL_ENDPOINTS_FAILED: string = 'All endpoints failed';
 const ERROR_NO_ENDPOINTS_AVAILABLE: string = 'No endpoints available for domain';
 const ERROR_WALL_CLOCK_TIMEOUT: string = 'Wall clock timeout exceeded';
@@ -319,11 +321,13 @@ const fetchWithAuth = async (params: FetchWithAuthParams): Promise<Response> => 
 
 // Helper functions for retry logic
 const isRetriableStatus = (status: number): boolean =>
-  status >= STATUS_SERVER_ERROR_START || status === STATUS_TOO_MANY_REQUESTS;
+  (status >= STATUS_SERVER_ERROR_START && status !== STATUS_WORKER_RESOURCE_EXHAUSTED) ||
+  status === STATUS_TOO_MANY_REQUESTS;
 
 const isServerErrorStatus = (status: number): boolean => status >= STATUS_SERVER_ERROR_START;
 
-const calculateMaxRetries = (endpointCount: number): number => Math.max(endpointCount, MIN_RETRIES);
+const calculateMaxRetries = (endpointCount: number): number =>
+  Math.min(Math.max(endpointCount, MIN_RETRIES), ABSOLUTE_MAX_RETRIES);
 
 const createSuccessResult = (response: Response, usedEndpoint: string): FetchRetryResult => ({
   success: true,
@@ -626,6 +630,7 @@ const handleServerErrorRetry = (
   const extendedMaxRetries: number = Math.min(
     state.maxRetries + EXTRA_RETRIES_PER_BLACKLIST,
     state.endpoints.length * MAX_RETRIES_MULTIPLIER,
+    ABSOLUTE_MAX_RETRIES,
   );
   return regionAwareRetryAttempt({
     ...state,
@@ -712,15 +717,24 @@ const isHedgeEligible = (state: RegionAwareRetryState): boolean => {
   return true;
 };
 
+// Cancel the losing hedge response body stream to release memory immediately
+const drainResponseBody = (promise: Promise<FetchAttemptResult>): void => {
+  promise
+    .then((result: FetchAttemptResult) => {
+      result.response?.body?.cancel().catch(() => {});
+    })
+    .catch(() => {});
+};
+
 // Abort the losing fetch in a hedge race and prevent unhandled rejection
 const abortHedgeLoser = (winner: HedgeRaceEntry, ctx: HedgeRaceContext): void => {
   if (winner.isPrimary) {
     ctx.hedgeAbort.abort();
-    ctx.hedgePromise.catch(() => {});
+    drainResponseBody(ctx.hedgePromise);
     return;
   }
   ctx.primaryAbort.abort();
-  ctx.primaryPromise.catch(() => {});
+  drainResponseBody(ctx.primaryPromise);
 };
 
 // Race primary vs hedge fetch and return winner
@@ -919,6 +933,7 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
 };
 
 export {
+  ABSOLUTE_MAX_RETRIES,
   ACCEPT_ENCODING_IDENTITY,
   buildHealthKey,
   buildThrottleKey,
@@ -927,6 +942,7 @@ export {
   clampTimeout,
   DEFAULT_HEDGE_DELAY_MS,
   DEFAULT_TIMEOUT_MS,
+  drainResponseBody,
   defaultTimeoutConfig,
   ENV_DEFAULT_TIMEOUT,
   ERROR_ALL_ENDPOINTS_FAILED,
@@ -958,6 +974,7 @@ export {
   resolveTuning,
   STATUS_SERVER_ERROR_START,
   STATUS_TOO_MANY_REQUESTS,
+  STATUS_WORKER_RESOURCE_EXHAUSTED,
   stripCompressionEncoding,
   THROTTLE_BACKOFF_MULTIPLIER,
   THROTTLE_BASE_DELAY_MS,
