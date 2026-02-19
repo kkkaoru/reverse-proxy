@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   AUTH_TYPE_API_KEY,
   AUTH_TYPE_IAM,
+  buildCumulativeWeights,
   extractRegionFromEndpoint,
   filterEndpointsByBannedRegions,
   getNextEndpoint,
@@ -14,6 +15,7 @@ import {
   parseBannedRegions,
   parseIpRotateConfig,
   pickRandomElement,
+  pickWeightedRandomElement,
   rewriteUrlForIpRotate,
   selectRegionAwareEndpoint,
 } from '../src/ip-rotate/client.ts';
@@ -623,4 +625,74 @@ test('filterEndpointsByBannedRegions filters across multiple domains', () => {
   expect(result['example.com']?.[0]?.apiKey).toBe('key1');
   expect(result['other.com']).toHaveLength(1);
   expect(result['other.com']?.[0]?.apiKey).toBe('key4');
+});
+
+// Weighted selection tests
+test('buildCumulativeWeights returns cumulative sums', () => {
+  expect(buildCumulativeWeights([1, 2, 3])).toStrictEqual([1, 3, 6]);
+});
+
+test('buildCumulativeWeights returns empty for empty input', () => {
+  expect(buildCumulativeWeights([])).toStrictEqual([]);
+});
+
+test('buildCumulativeWeights handles single element', () => {
+  expect(buildCumulativeWeights([5])).toStrictEqual([5]);
+});
+
+test('pickWeightedRandomElement returns undefined for empty array', () => {
+  expect(pickWeightedRandomElement([], [1])).toBeUndefined();
+});
+
+test('pickWeightedRandomElement falls back to uniform when no weights', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  expect(pickWeightedRandomElement(['a', 'b', 'c'])).toBe('a');
+});
+
+test('pickWeightedRandomElement selects by weight', () => {
+  // With random=0, should select first element (weight 10)
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  expect(pickWeightedRandomElement(['a', 'b'], [10, 1])).toBe('a');
+});
+
+test('pickWeightedRandomElement selects second element at high random', () => {
+  // With random=0.99, target = 0.99 * 11 = 10.89 > 10 (cumulative[0]), so picks 'b'
+  vi.spyOn(Math, 'random').mockReturnValue(0.99);
+  expect(pickWeightedRandomElement(['a', 'b'], [10, 1])).toBe('b');
+});
+
+test('pickWeightedRandomElement falls back to uniform for all-zero weights', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  expect(pickWeightedRandomElement(['a', 'b', 'c'], [0, 0, 0])).toBe('a');
+});
+
+test('selectRegionAwareEndpoint uses weights to prefer healthier endpoints', () => {
+  const endpoints: readonly EndpointWithApiKey[] = [
+    { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+    { endpoint: 'https://b.execute-api.eu-west-1.amazonaws.com/proxy', apiKey: 'key2' },
+  ];
+  // Weight 0 for first endpoint, weight 1 for second
+  // Random = 0 means target = 0, cumulative[0] = 0, so findIndex finds index 1 (0 < 1)
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  const result = selectRegionAwareEndpoint({
+    endpoints,
+    triedRegions: new Set(),
+    triedEndpointIndices: new Set(),
+    endpointWeights: [0, 1],
+  });
+  expect(result?.index).toBe(1);
+  expect(result?.region).toBe('eu-west-1');
+});
+
+test('selectRegionAwareEndpoint works without weights (backward compatible)', () => {
+  const endpoints: readonly EndpointWithApiKey[] = [
+    { endpoint: 'https://a.execute-api.us-east-1.amazonaws.com/proxy', apiKey: 'key1' },
+  ];
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+  const result = selectRegionAwareEndpoint({
+    endpoints,
+    triedRegions: new Set(),
+    triedEndpointIndices: new Set(),
+  });
+  expect(result?.index).toBe(0);
 });

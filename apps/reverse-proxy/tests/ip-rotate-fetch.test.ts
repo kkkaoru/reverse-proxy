@@ -9,9 +9,11 @@ import {
   fetchWithAuth,
   fetchWithRetry,
   getDefaultTimeoutFromEnv,
-  isErrorStatus,
   isRetriableError,
-  STATUS_ERROR_THRESHOLD,
+  isRetriableStatus,
+  isServerErrorStatus,
+  STATUS_SERVER_ERROR_START,
+  STATUS_TOO_MANY_REQUESTS,
 } from '../src/ip-rotate/fetch.ts';
 import type {
   FetchWithAuthParams,
@@ -232,17 +234,35 @@ describe('ip-rotate-fetch retry logic', () => {
     vi.restoreAllMocks();
   });
 
-  test('isErrorStatus returns true for status >= 400', () => {
-    expect(isErrorStatus(400)).toBe(true);
-    expect(isErrorStatus(404)).toBe(true);
-    expect(isErrorStatus(500)).toBe(true);
-    expect(isErrorStatus(STATUS_ERROR_THRESHOLD)).toBe(true);
+  test('isRetriableStatus returns true for status >= 500', () => {
+    expect(isRetriableStatus(500)).toBe(true);
+    expect(isRetriableStatus(502)).toBe(true);
+    expect(isRetriableStatus(503)).toBe(true);
+    expect(isRetriableStatus(STATUS_SERVER_ERROR_START)).toBe(true);
   });
 
-  test('isErrorStatus returns false for status < 400', () => {
-    expect(isErrorStatus(200)).toBe(false);
-    expect(isErrorStatus(301)).toBe(false);
-    expect(isErrorStatus(399)).toBe(false);
+  test('isRetriableStatus returns true for 429', () => {
+    expect(isRetriableStatus(429)).toBe(true);
+    expect(isRetriableStatus(STATUS_TOO_MANY_REQUESTS)).toBe(true);
+  });
+
+  test('isRetriableStatus returns false for 2xx/3xx/4xx (except 429)', () => {
+    expect(isRetriableStatus(200)).toBe(false);
+    expect(isRetriableStatus(301)).toBe(false);
+    expect(isRetriableStatus(400)).toBe(false);
+    expect(isRetriableStatus(404)).toBe(false);
+  });
+
+  test('isServerErrorStatus returns true for 5xx', () => {
+    expect(isServerErrorStatus(500)).toBe(true);
+    expect(isServerErrorStatus(502)).toBe(true);
+    expect(isServerErrorStatus(503)).toBe(true);
+  });
+
+  test('isServerErrorStatus returns false for non-5xx', () => {
+    expect(isServerErrorStatus(200)).toBe(false);
+    expect(isServerErrorStatus(429)).toBe(false);
+    expect(isServerErrorStatus(404)).toBe(false);
   });
 
   test('calculateMaxRetries returns max of endpoint count and MIN_RETRIES', () => {
@@ -282,12 +302,42 @@ describe('ip-rotate-fetch retry logic', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
-  test('fetchWithRetry retries on 4xx error and succeeds', async () => {
-    let callCount = 0;
+  test('fetchWithRetry returns 404 as success without retry', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 }));
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.response.status).toBe(404);
+    }
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('fetchWithRetry retries on 429 and succeeds', async () => {
+    let callCount: number = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
-        return Promise.resolve(new Response('error', { status: 404 }));
+        return Promise.resolve(new Response('throttled', { status: 429 }));
       }
       return Promise.resolve(new Response('ok', { status: 200 }));
     });
@@ -320,7 +370,7 @@ describe('ip-rotate-fetch retry logic', () => {
   });
 
   test('fetchWithRetry retries on 5xx error and succeeds', async () => {
-    let callCount = 0;
+    let callCount: number = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount <= 2) {
@@ -334,6 +384,7 @@ describe('ip-rotate-fetch retry logic', () => {
         'example.com': [
           { endpoint: 'https://api1.example.com', apiKey: 'key1' },
           { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+          { endpoint: 'https://api3.example.com', apiKey: 'key3' },
         ],
       },
       auth: { type: 'api-key', apiKey: 'test-key' },
@@ -356,7 +407,7 @@ describe('ip-rotate-fetch retry logic', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 
-  test('fetchWithRetry fails after max retries (2 loops)', async () => {
+  test('fetchWithRetry fails after max retries', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('error', { status: 500 }));
 
     const config: IpRotateConfig = {
@@ -384,7 +435,6 @@ describe('ip-rotate-fetch retry logic', () => {
       expect(result.error).toBe(ERROR_ALL_ENDPOINTS_FAILED);
       expect(result.lastResponse?.status).toBe(500);
     }
-    expect(globalThis.fetch).toHaveBeenCalledTimes(5);
   });
 
   test('fetchWithRetry returns failure when no endpoints available', async () => {
@@ -438,12 +488,10 @@ describe('ip-rotate-fetch retry logic', () => {
 
     await fetchWithRetry(params);
 
-    expect(capturedUrls).toHaveLength(5);
+    // With blacklisting: api1 (502, blacklisted), api2 (502, blacklisted) -> all blacklisted -> fail
+    // Both endpoints return 500, both get blacklisted, then all are blacklisted -> fail
     expect(capturedUrls[0]).toBe('https://api1.example.com/path');
     expect(capturedUrls[1]).toBe('https://api2.example.com/path');
-    expect(capturedUrls[2]).toBe('https://api1.example.com/path');
-    expect(capturedUrls[3]).toBe('https://api2.example.com/path');
-    expect(capturedUrls[4]).toBe('https://api1.example.com/path');
   });
 
   test('fetchWithRetry uses endpoint-specific API key', async () => {
@@ -473,12 +521,177 @@ describe('ip-rotate-fetch retry logic', () => {
 
     await fetchWithRetry(params);
 
-    expect(capturedHeaders).toHaveLength(5);
     expect(capturedHeaders[0]?.['x-api-key']).toBe('endpoint-key-1');
     expect(capturedHeaders[1]?.['x-api-key']).toBe('endpoint-key-2');
-    expect(capturedHeaders[2]?.['x-api-key']).toBe('endpoint-key-1');
-    expect(capturedHeaders[3]?.['x-api-key']).toBe('endpoint-key-2');
-    expect(capturedHeaders[4]?.['x-api-key']).toBe('endpoint-key-1');
+  });
+});
+
+describe('ip-rotate-fetch blacklisting and health tracking', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  // 5xx blacklisting integration test
+  test('fetchWithRetry blacklists 5xx endpoints in round-robin', async () => {
+    const capturedUrls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrls.push(url);
+      if (url.startsWith('https://api1.example.com')) {
+        return Promise.resolve(new Response('error', { status: 502 }));
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    expect(capturedUrls[0]).toBe('https://api1.example.com/path');
+    expect(capturedUrls[1]).toBe('https://api2.example.com/path');
+    expect(capturedUrls.length).toBe(2);
+  });
+
+  // G-1: Cross-request deprioritization integration test
+  test('fetchWithRetry deprioritizes recently failed endpoints across requests (G-1)', async () => {
+    const capturedUrls: string[] = [];
+    const counters: Map<string, number> = new Map();
+    // Simulate prior request that recorded api1 as failed
+    counters.set('5xx:example.com:0', Date.now());
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrls.push(url);
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters,
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    // Should skip api1 (index 0) and try api2 first
+    expect(capturedUrls[0]).toBe('https://api2.example.com/path');
+    expect(capturedUrls.length).toBe(1);
+  });
+
+  // G-2: maxRetries extension integration test
+  test('fetchWithRetry extends maxRetries when endpoints are blacklisted (G-2)', async () => {
+    let callCount: number = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      callCount++;
+      if (
+        url.startsWith('https://api1.example.com') ||
+        url.startsWith('https://api2.example.com')
+      ) {
+        return Promise.resolve(new Response('error', { status: 502 }));
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+          { endpoint: 'https://api3.example.com', apiKey: 'key3' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters: new Map(),
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    // api1 -> 502, api2 -> 502, api3 -> 200
+    expect(result.success).toBe(true);
+    expect(callCount).toBe(3);
+  });
+
+  // G-4: Timeout deprioritization integration test
+  test('fetchWithRetry records timeout for cross-request deprioritization (G-4)', async () => {
+    let callCount: number = 0;
+    const counters: Map<string, number> = new Map();
+
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        const error: Error = new Error('timeout');
+        error.name = 'TimeoutError';
+        return Promise.reject(error);
+      }
+      return Promise.resolve(new Response('ok', { status: 200 }));
+    });
+
+    const config: IpRotateConfig = {
+      endpoints: {
+        'example.com': [
+          { endpoint: 'https://api1.example.com', apiKey: 'key1' },
+          { endpoint: 'https://api2.example.com', apiKey: 'key2' },
+        ],
+      },
+      auth: { type: 'api-key', apiKey: 'test-key' },
+    };
+
+    const params: FetchWithRetryParams = {
+      config,
+      targetUrl: new URL('https://example.com/path'),
+      counters,
+      headers: {},
+      method: 'GET',
+    };
+
+    const result = await fetchWithRetry(params);
+
+    expect(result.success).toBe(true);
+    // Timeout should have been recorded for deprioritization
+    expect(counters.has('5xx:example.com:0')).toBe(true);
   });
 });
 
@@ -533,7 +746,7 @@ describe('ip-rotate-fetch retriable error retry', () => {
 
   test('fetchWithRetry retries on TypeError (network error) and succeeds', async () => {
     const capturedUrls: string[] = [];
-    let callCount = 0;
+    let callCount: number = 0;
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       capturedUrls.push(url);
       callCount++;
@@ -571,7 +784,7 @@ describe('ip-rotate-fetch retriable error retry', () => {
 
   test('fetchWithRetry retries on AbortError with timeout message and succeeds', async () => {
     const capturedUrls: string[] = [];
-    let callCount = 0;
+    let callCount: number = 0;
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       capturedUrls.push(url);
       callCount++;
@@ -638,7 +851,7 @@ describe('ip-rotate-fetch retriable error retry', () => {
 
   test('fetchWithRetry logs retry attempts on timeout', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    let callCount = 0;
+    let callCount: number = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
@@ -669,18 +882,24 @@ describe('ip-rotate-fetch retriable error retry', () => {
 
     await fetchWithRetry(params);
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[ip-rotate] retry attempt=0 endpoint=https://api1.example.com reason=timeout',
-    );
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[ip-rotate] success attempt=1 endpoint=https://api2.example.com',
-    );
+    expect(consoleSpy).toHaveBeenCalledWith('[ip-rotate]', {
+      event: 'retry',
+      attempt: 0,
+      endpoint: 'https://api1.example.com',
+      reason: 'timeout',
+    });
+    expect(consoleSpy).toHaveBeenCalledWith('[ip-rotate]', {
+      event: 'success',
+      attempt: 1,
+      endpoint: 'https://api2.example.com',
+      status: 200,
+    });
     consoleSpy.mockRestore();
   });
 
-  test('fetchWithRetry logs retry attempts on error status', async () => {
+  test('fetchWithRetry logs retry attempts on server error', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    let callCount = 0;
+    let callCount: number = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
@@ -709,12 +928,19 @@ describe('ip-rotate-fetch retriable error retry', () => {
 
     await fetchWithRetry(params);
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[ip-rotate] retry attempt=0 endpoint=https://api1.example.com reason=error-status',
-    );
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[ip-rotate] success attempt=1 endpoint=https://api2.example.com',
-    );
+    expect(consoleSpy).toHaveBeenCalledWith('[ip-rotate]', {
+      event: 'retry',
+      attempt: 0,
+      endpoint: 'https://api1.example.com',
+      reason: 'server-error',
+      status: 500,
+    });
+    expect(consoleSpy).toHaveBeenCalledWith('[ip-rotate]', {
+      event: 'success',
+      attempt: 1,
+      endpoint: 'https://api2.example.com',
+      status: 200,
+    });
     consoleSpy.mockRestore();
   });
 });

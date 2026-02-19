@@ -4,14 +4,26 @@
 // API Gateway consumes x-api-key and IAM signature headers before forwarding
 
 import {
+  CACHE_MODE_NO_STORE,
+  HEADER_ACCEPT_ENCODING,
+  REDIRECT_MANUAL,
+} from '../proxy/constants.ts';
+import {
   buildRewrittenUrl,
   getEndpointCount,
   getEndpointList,
   selectRegionAwareEndpoint,
 } from './client.ts';
+import {
+  getAdaptiveHedgeDelay,
+  getEndpointWeights,
+  recordResponseTime,
+  updateHealthScore,
+} from './metrics.ts';
 import { signRequest } from './signer.ts';
 import type {
   EndpointWithApiKey,
+  FetchRetryErrorCode,
   FetchRetryResult,
   FetchWithAuthParams,
   FetchWithRetryParams,
@@ -22,32 +34,174 @@ import type {
   TimeoutConfig,
 } from './types.ts';
 
+// Interfaces at top
+interface RecordEndpointFailureParams {
+  readonly counters: Map<string, number>;
+  readonly domain: string;
+  readonly index: number;
+}
+
+interface GetRecentlyFailedParams {
+  readonly counters: Map<string, number>;
+  readonly domain: string;
+  readonly endpointCount: number;
+  readonly healthTtlMs?: number;
+}
+
+interface RecordEndpointThrottleParams {
+  readonly counters: Map<string, number>;
+  readonly domain: string;
+  readonly index: number;
+}
+
+interface GetRecentlyThrottledParams {
+  readonly counters: Map<string, number>;
+  readonly domain: string;
+  readonly endpointCount: number;
+  readonly throttleTtlMs?: number;
+}
+
+interface ResolvedTuning {
+  readonly healthTtlMs: number;
+  readonly maxHedgeAttempts: number;
+  readonly hedgeDelayMs: number;
+  readonly throttleBaseDelayMs: number;
+  readonly throttleTtlMs: number;
+  readonly hedgeSuppressThreshold: number;
+}
+
+interface RegionAwareRetryState {
+  readonly params: FetchWithRetryParams;
+  readonly endpoints: readonly EndpointWithApiKey[];
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly lastResponse: Response | null;
+  readonly lastUsedEndpoint: string | null;
+  readonly currentTimeoutMs: number;
+  readonly timeoutConfig: TimeoutConfig;
+  readonly triedRegions: Set<string>;
+  readonly triedEndpointIndices: Set<number>;
+  readonly serverErrorEndpoints: Set<number>;
+  readonly wallClockSignal?: AbortSignal;
+  readonly consecutiveThrottles: number;
+  readonly hedgeAttemptsUsed: number;
+  readonly tuning: ResolvedTuning;
+}
+
+interface FetchAttemptResult {
+  readonly response: Response | null;
+  readonly timedOut: boolean;
+  readonly usedEndpoint: string;
+}
+
+interface HedgedFetchResult {
+  readonly result: FetchAttemptResult;
+  readonly selected: RegionAwareEndpointResult;
+  readonly hedgeStarted: boolean;
+}
+
+interface HedgeRaceEntry {
+  readonly result: FetchAttemptResult;
+  readonly isPrimary: boolean;
+}
+
+interface HedgeRaceContext {
+  readonly primaryAbort: AbortController;
+  readonly hedgeAbort: AbortController;
+  readonly primaryPromise: Promise<FetchAttemptResult>;
+  readonly hedgePromise: Promise<FetchAttemptResult>;
+}
+
+interface RaceHedgeFetchesParams {
+  readonly state: RegionAwareRetryState;
+  readonly primarySelected: RegionAwareEndpointResult;
+  readonly hedgeSelected: RegionAwareEndpointResult;
+  readonly primaryAbort: AbortController;
+  readonly primaryPromise: Promise<FetchAttemptResult>;
+}
+
 // Constants at top
-const HEADER_API_KEY = 'x-api-key';
+const ACCEPT_ENCODING_IDENTITY: string = 'identity';
+const HEADER_API_KEY: string = 'x-api-key';
 const AUTH_TYPE_API_KEY = 'api-key';
 const AUTH_TYPE_IAM = 'iam';
-const ERROR_INVALID_AUTH_TYPE = 'Invalid auth type';
-const ERROR_UNSUPPORTED_AUTH_TYPE = 'Unsupported auth type';
-const ERROR_REQUEST_TIMEOUT = 'Request timed out';
+const ERROR_INVALID_AUTH_TYPE: string = 'Invalid auth type';
+const ERROR_UNSUPPORTED_AUTH_TYPE: string = 'Unsupported auth type';
+const ERROR_REQUEST_TIMEOUT: string = 'Request timed out';
 
 // Timeout constants
-const ENV_DEFAULT_TIMEOUT = 'DEFAULT_TIMEOUT_MS';
-const DEFAULT_TIMEOUT_MS = 2000;
-const MIN_TIMEOUT_MS = 2000;
-const MAX_TIMEOUT_MS = 8000;
-const TIMEOUT_ADJUSTMENT_MS = 500;
+const ENV_DEFAULT_TIMEOUT: string = 'DEFAULT_TIMEOUT_MS';
+const DEFAULT_TIMEOUT_MS: number = 2000;
+const MIN_TIMEOUT_MS: number = 2000;
+const MAX_TIMEOUT_MS: number = 8000;
 // biome-ignore lint/nursery/noSecrets: TimeoutError is a standard error name, not a secret
-const TIMEOUT_ERROR_NAME = 'TimeoutError';
-const ABORT_ERROR_NAME = 'AbortError';
-const TYPE_ERROR_NAME = 'TypeError';
+const TIMEOUT_ERROR_NAME: string = 'TimeoutError';
+const ABORT_ERROR_NAME: string = 'AbortError';
+const TYPE_ERROR_NAME: string = 'TypeError';
 const TIMEOUT_MESSAGE_PATTERN: RegExp = /timeout/i;
+
+// Retry logic constants
+const STATUS_SERVER_ERROR_START: number = 500;
+const STATUS_TOO_MANY_REQUESTS: number = 429;
+const MIN_RETRIES: number = 5;
+const ERROR_ALL_ENDPOINTS_FAILED: string = 'All endpoints failed';
+const ERROR_NO_ENDPOINTS_AVAILABLE: string = 'No endpoints available for domain';
+const ERROR_WALL_CLOCK_TIMEOUT: string = 'Wall clock timeout exceeded';
+
+// G-1: Health tracking constants
+const HEALTH_TTL_MS: number = 60000;
+const HEALTH_KEY_PREFIX: string = '5xx';
+
+// G-2: Retry budget extension constants
+const EXTRA_RETRIES_PER_BLACKLIST: number = 2;
+const MAX_RETRIES_MULTIPLIER: number = 3;
+
+// G-3: Timeout boost constant
+const TIMEOUT_BOOST_PER_BLACKLIST_MS: number = 500;
+
+// Hedge request constants
+const DEFAULT_HEDGE_DELAY_MS: number = 500;
+const MAX_HEDGE_ATTEMPTS: number = 2;
+const HEDGE_ATTEMPT_COST: number = 2;
+
+// Throttle backoff constants
+const THROTTLE_BASE_DELAY_MS: number = 100;
+const THROTTLE_MAX_DELAY_MS: number = 1000;
+const THROTTLE_BACKOFF_MULTIPLIER: number = 2;
+const THROTTLE_JITTER_RATIO: number = 0.3;
+
+// Throttle tracking constants
+const THROTTLE_TTL_MS: number = 10000;
+const THROTTLE_KEY_PREFIX: string = '429';
+
+// Hedge suppression constants
+const HEDGE_SUPPRESS_THRESHOLD: number = 3;
+
+// Parse positive integer from env var with fallback
+const parsePositiveIntEnv = (value: string | undefined, fallback: number): number => {
+  if (!value) return fallback;
+  const parsed: number = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+};
+
+// Resolve tuning parameters from env vars with hardcoded fallbacks
+const resolveTuning = (params: FetchWithRetryParams): ResolvedTuning => ({
+  healthTtlMs: parsePositiveIntEnv(params.envHealthTtlMs, HEALTH_TTL_MS),
+  maxHedgeAttempts: parsePositiveIntEnv(params.envMaxHedgeAttempts, MAX_HEDGE_ATTEMPTS),
+  hedgeDelayMs: parsePositiveIntEnv(params.envHedgeDelayMs, DEFAULT_HEDGE_DELAY_MS),
+  throttleBaseDelayMs: parsePositiveIntEnv(params.envThrottleBaseDelayMs, THROTTLE_BASE_DELAY_MS),
+  throttleTtlMs: parsePositiveIntEnv(params.envThrottleTtlMs, THROTTLE_TTL_MS),
+  hedgeSuppressThreshold: parsePositiveIntEnv(
+    params.envHedgeSuppressThreshold,
+    HEDGE_SUPPRESS_THRESHOLD,
+  ),
+});
 
 // Timeout configuration
 const defaultTimeoutConfig: TimeoutConfig = {
   defaultMs: DEFAULT_TIMEOUT_MS,
   minMs: MIN_TIMEOUT_MS,
   maxMs: MAX_TIMEOUT_MS,
-  adjustmentMs: TIMEOUT_ADJUSTMENT_MS,
 } satisfies TimeoutConfig;
 
 // Timeout helper functions
@@ -67,13 +221,23 @@ const getDefaultTimeoutFromEnv = (envValue: string | undefined): number => {
 const clampTimeout = (timeout: number, config: TimeoutConfig): number =>
   Math.min(Math.max(timeout, config.minMs), config.maxMs);
 
-const adjustTimeoutOnSuccess = (currentTimeout: number, config: TimeoutConfig): number =>
-  clampTimeout(currentTimeout - config.adjustmentMs, config);
-
-const adjustTimeoutOnFailure = (currentTimeout: number, config: TimeoutConfig): number =>
-  clampTimeout(currentTimeout + config.adjustmentMs, config);
-
 const createAbortSignal = (timeoutMs: number): AbortSignal => AbortSignal.timeout(timeoutMs);
+
+// Throttle backoff helpers
+const calculateThrottleDelay = (
+  consecutiveThrottles: number,
+  baseDelayMs: number = THROTTLE_BASE_DELAY_MS,
+): number => {
+  const baseDelay: number = Math.min(
+    baseDelayMs * THROTTLE_BACKOFF_MULTIPLIER ** consecutiveThrottles,
+    THROTTLE_MAX_DELAY_MS,
+  );
+  const jitterRange: number = Math.floor(baseDelay * THROTTLE_JITTER_RATIO);
+  const jitter: number = Math.floor(Math.random() * jitterRange);
+  return baseDelay + jitter;
+};
+
+const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Type for auth handler function
 type AuthHandler = (params: FetchWithAuthParams) => Promise<Response>;
@@ -87,25 +251,33 @@ const createApiKeyAuthHeaders = (
   [HEADER_API_KEY]: apiKey,
 });
 
+// Force identity encoding to prevent API Gateway from corrupting compressed responses
+const stripCompressionEncoding = (headers: Record<string, string>): Record<string, string> => ({
+  ...headers,
+  [HEADER_ACCEPT_ENCODING]: ACCEPT_ENCODING_IDENTITY,
+});
+
 const isApiKeyAuth = (auth: IpRotateAuth): auth is IpRotateAuthApiKey =>
   auth.type === AUTH_TYPE_API_KEY;
 
 const isIamAuth = (auth: IpRotateAuth): auth is IpRotateAuthIam => auth.type === AUTH_TYPE_IAM;
 
-const fetchWithApiKey = (params: FetchWithAuthParams): Promise<Response> => {
+const fetchWithApiKey = async (params: FetchWithAuthParams): Promise<Response> => {
   if (!isApiKeyAuth(params.auth)) {
-    return Promise.reject(new Error(ERROR_INVALID_AUTH_TYPE));
+    throw new Error(ERROR_INVALID_AUTH_TYPE);
   }
   // x-api-key is consumed by API Gateway, not forwarded to target
   const gatewayHeaders: Record<string, string> = createApiKeyAuthHeaders(
-    params.headers,
+    stripCompressionEncoding(params.headers),
     params.auth.apiKey,
   );
-  return globalThis.fetch(params.url.toString(), {
+  return await globalThis.fetch(params.url.toString(), {
     method: params.method,
     headers: gatewayHeaders,
     body: params.body,
     signal: params.signal,
+    redirect: REDIRECT_MANUAL,
+    cache: CACHE_MODE_NO_STORE,
   });
 };
 
@@ -117,7 +289,7 @@ const fetchWithIam = async (params: FetchWithAuthParams): Promise<Response> => {
   const signed = await signRequest({
     url: params.url,
     method: params.method,
-    headers: params.headers,
+    headers: stripCompressionEncoding(params.headers),
     body: params.body,
     auth: params.auth,
   });
@@ -126,6 +298,8 @@ const fetchWithIam = async (params: FetchWithAuthParams): Promise<Response> => {
     headers: signed.headers,
     body: params.body,
     signal: params.signal,
+    redirect: REDIRECT_MANUAL,
+    cache: CACHE_MODE_NO_STORE,
   });
 };
 
@@ -135,23 +309,19 @@ const authHandlers: Record<string, AuthHandler> = {
   [AUTH_TYPE_IAM]: fetchWithIam,
 };
 
-const fetchWithAuth = (params: FetchWithAuthParams): Promise<Response> => {
+const fetchWithAuth = async (params: FetchWithAuthParams): Promise<Response> => {
   const handler: AuthHandler | undefined = authHandlers[params.auth.type];
   if (!handler) {
-    return Promise.reject(new Error(`${ERROR_UNSUPPORTED_AUTH_TYPE}: ${params.auth.type}`));
+    throw new Error(`${ERROR_UNSUPPORTED_AUTH_TYPE}: ${params.auth.type}`);
   }
-  return handler(params);
+  return await handler(params);
 };
 
-// Constants for retry logic
-const STATUS_ERROR_THRESHOLD = 400;
-const MIN_RETRIES = 5;
-const ERROR_ALL_ENDPOINTS_FAILED = 'All endpoints failed';
-const ERROR_NO_ENDPOINTS_AVAILABLE = 'No endpoints available for domain';
-const ERROR_WALL_CLOCK_TIMEOUT = 'Wall clock timeout exceeded';
-
 // Helper functions for retry logic
-const isErrorStatus = (status: number): boolean => status >= STATUS_ERROR_THRESHOLD;
+const isRetriableStatus = (status: number): boolean =>
+  status >= STATUS_SERVER_ERROR_START || status === STATUS_TOO_MANY_REQUESTS;
+
+const isServerErrorStatus = (status: number): boolean => status >= STATUS_SERVER_ERROR_START;
 
 const calculateMaxRetries = (endpointCount: number): number => Math.max(endpointCount, MIN_RETRIES);
 
@@ -161,15 +331,21 @@ const createSuccessResult = (response: Response, usedEndpoint: string): FetchRet
   usedEndpoint,
 });
 
-const createFailureResult = (
-  lastResponse: Response | null,
-  lastUsedEndpoint: string | null,
-  error: string,
-): FetchRetryResult => ({
+interface CreateFailureParams {
+  readonly lastResponse: Response | null;
+  readonly lastUsedEndpoint: string | null;
+  readonly error: string;
+  readonly errorCode: FetchRetryErrorCode;
+  readonly totalAttempts: number;
+}
+
+const createFailureResult = (params: CreateFailureParams): FetchRetryResult => ({
   success: false,
-  lastResponse,
-  lastUsedEndpoint,
-  error,
+  lastResponse: params.lastResponse,
+  lastUsedEndpoint: params.lastUsedEndpoint,
+  error: params.error,
+  errorCode: params.errorCode,
+  totalAttempts: params.totalAttempts,
 });
 
 const createAuthFromEndpoint = (baseAuth: IpRotateAuth, endpointApiKey: string): IpRotateAuth => {
@@ -181,19 +357,60 @@ const createAuthFromEndpoint = (baseAuth: IpRotateAuth, endpointApiKey: string):
   return baseAuth;
 };
 
-interface RegionAwareRetryState {
-  readonly params: FetchWithRetryParams;
-  readonly endpoints: readonly EndpointWithApiKey[];
-  readonly attempt: number;
-  readonly maxRetries: number;
-  readonly lastResponse: Response | null;
-  readonly lastUsedEndpoint: string | null;
-  readonly currentTimeoutMs: number;
-  readonly timeoutConfig: TimeoutConfig;
-  readonly triedRegions: Set<string>;
-  readonly triedEndpointIndices: Set<number>;
-  readonly wallClockSignal?: AbortSignal;
-}
+// G-1: Health tracking functions
+const buildHealthKey = (domain: string, index: number): string =>
+  `${HEALTH_KEY_PREFIX}:${domain}:${index}`;
+
+const recordEndpointFailure = (params: RecordEndpointFailureParams): void => {
+  params.counters.set(buildHealthKey(params.domain, params.index), Date.now());
+};
+
+const getRecentlyFailedIndices = (params: GetRecentlyFailedParams): Set<number> => {
+  const now: number = Date.now();
+  const ttl: number = params.healthTtlMs ?? HEALTH_TTL_MS;
+  return new Set(
+    Array.from({ length: params.endpointCount }, (_: unknown, i: number) => i).filter(
+      (i: number) => {
+        const lastFailure: number | undefined = params.counters.get(
+          buildHealthKey(params.domain, i),
+        );
+        return lastFailure !== undefined && now - lastFailure < ttl;
+      },
+    ),
+  );
+};
+
+// Throttle tracking functions
+const buildThrottleKey = (domain: string, index: number): string =>
+  `${THROTTLE_KEY_PREFIX}:${domain}:${index}`;
+
+const recordEndpointThrottle = (params: RecordEndpointThrottleParams): void => {
+  params.counters.set(buildThrottleKey(params.domain, params.index), Date.now());
+};
+
+const getRecentlyThrottledIndices = (params: GetRecentlyThrottledParams): Set<number> => {
+  const now: number = Date.now();
+  const ttl: number = params.throttleTtlMs ?? THROTTLE_TTL_MS;
+  return new Set(
+    Array.from({ length: params.endpointCount }, (_: unknown, i: number) => i).filter(
+      (i: number) => {
+        const lastThrottle: number | undefined = params.counters.get(
+          buildThrottleKey(params.domain, i),
+        );
+        return lastThrottle !== undefined && now - lastThrottle < ttl;
+      },
+    ),
+  );
+};
+
+// Hedge suppression: suppress when too many endpoints are throttled
+const shouldSuppressHedge = (state: RegionAwareRetryState): boolean =>
+  getRecentlyThrottledIndices({
+    counters: state.params.counters,
+    domain: state.params.targetUrl.host,
+    endpointCount: state.endpoints.length,
+    throttleTtlMs: state.tuning.throttleTtlMs,
+  }).size >= state.tuning.hedgeSuppressThreshold;
 
 const isTimeoutError = (error: unknown): boolean =>
   error instanceof Error && error.name === TIMEOUT_ERROR_NAME;
@@ -209,7 +426,8 @@ const isRetriableError = (error: unknown): boolean => {
 const tryRegionAwareFetch = async (
   state: RegionAwareRetryState,
   selected: RegionAwareEndpointResult,
-): Promise<{ response: Response | null; timedOut: boolean; usedEndpoint: string }> => {
+  extraAbortSignal?: AbortSignal,
+): Promise<FetchAttemptResult> => {
   const rewrittenUrl: URL = buildRewrittenUrl(selected.endpoint.endpoint, state.params.targetUrl);
   const usedEndpoint: string = rewrittenUrl.origin;
   const auth: IpRotateAuth = createAuthFromEndpoint(
@@ -219,9 +437,12 @@ const tryRegionAwareFetch = async (
 
   try {
     const perAttemptSignal: AbortSignal = createAbortSignal(state.currentTimeoutMs);
-    const signal: AbortSignal = state.wallClockSignal
-      ? AbortSignal.any([perAttemptSignal, state.wallClockSignal])
-      : perAttemptSignal;
+    const signal: AbortSignal = AbortSignal.any(
+      [perAttemptSignal, state.wallClockSignal, extraAbortSignal].filter(
+        (s): s is AbortSignal => s !== undefined,
+      ),
+    );
+    const startTime: number = Date.now();
     const response: Response = await fetchWithAuth({
       url: rewrittenUrl,
       auth,
@@ -230,8 +451,18 @@ const tryRegionAwareFetch = async (
       body: state.params.body,
       signal,
     });
+    recordResponseTime({
+      counters: state.params.counters,
+      domain: state.params.targetUrl.host,
+      index: selected.index,
+      responseTimeMs: Date.now() - startTime,
+    });
     return { response, timedOut: false, usedEndpoint };
   } catch (error: unknown) {
+    // In hedge mode, treat all AbortErrors as retriable (hedge race loser or wallClock)
+    if (extraAbortSignal && error instanceof Error && error.name === ABORT_ERROR_NAME) {
+      return { response: null, timedOut: true, usedEndpoint };
+    }
     if (isRetriableError(error)) {
       return { response: null, timedOut: true, usedEndpoint };
     }
@@ -239,49 +470,386 @@ const tryRegionAwareFetch = async (
   }
 };
 
+// Reset blacklisted endpoints into triedEndpointIndices after round-robin reset
+const reapplyBlacklist = (state: RegionAwareRetryState): void => {
+  for (const index of state.serverErrorEndpoints) {
+    state.triedEndpointIndices.add(index);
+  }
+};
+
+// G-3: Calculate boosted timeout based on blacklisted endpoint count
+const calculateBoostedTimeout = (state: RegionAwareRetryState): number =>
+  state.serverErrorEndpoints.size > 0
+    ? clampTimeout(
+        state.currentTimeoutMs + TIMEOUT_BOOST_PER_BLACKLIST_MS * state.serverErrorEndpoints.size,
+        state.timeoutConfig,
+      )
+    : state.currentTimeoutMs;
+
+// Handle round-robin reset when all endpoints have been tried
+const handleRoundRobinReset = (state: RegionAwareRetryState): Promise<FetchRetryResult> => {
+  state.triedEndpointIndices.clear();
+  state.triedRegions.clear();
+  reapplyBlacklist(state);
+
+  const boostedTimeout: number = calculateBoostedTimeout(state);
+  const retrySelected: RegionAwareEndpointResult | null = selectEndpointWithWeights(state);
+  if (!retrySelected) {
+    return Promise.resolve(
+      createFailureResult({
+        lastResponse: state.lastResponse,
+        lastUsedEndpoint: state.lastUsedEndpoint,
+        error: ERROR_ALL_ENDPOINTS_FAILED,
+        errorCode: 'MAX_RETRIES',
+        totalAttempts: state.attempt,
+      }),
+    );
+  }
+  return regionAwareRetryAttemptWithSelected(
+    { ...state, currentTimeoutMs: boostedTimeout },
+    retrySelected,
+  );
+};
+
+// Select endpoint with EWMA-based health weights
+const selectEndpointWithWeights = (
+  state: RegionAwareRetryState,
+): RegionAwareEndpointResult | null =>
+  selectRegionAwareEndpoint({
+    endpoints: state.endpoints,
+    triedRegions: state.triedRegions,
+    triedEndpointIndices: state.triedEndpointIndices,
+    endpointWeights: getEndpointWeights({
+      counters: state.params.counters,
+      domain: state.params.targetUrl.host,
+      endpointCount: state.endpoints.length,
+    }),
+  });
+
 const regionAwareRetryAttempt = (state: RegionAwareRetryState): Promise<FetchRetryResult> => {
   if (state.wallClockSignal?.aborted) {
     // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
-    console.log('[ip-rotate] wall clock timeout exceeded, stopping retries');
+    console.log('[ip-rotate]', { event: 'wall-clock-timeout', attempt: state.attempt });
     return Promise.resolve(
-      createFailureResult(state.lastResponse, state.lastUsedEndpoint, ERROR_WALL_CLOCK_TIMEOUT),
+      createFailureResult({
+        lastResponse: state.lastResponse,
+        lastUsedEndpoint: state.lastUsedEndpoint,
+        error: ERROR_WALL_CLOCK_TIMEOUT,
+        errorCode: 'WALL_CLOCK_TIMEOUT',
+        totalAttempts: state.attempt,
+      }),
     );
   }
 
   if (state.attempt >= state.maxRetries) {
     return Promise.resolve(
-      createFailureResult(state.lastResponse, state.lastUsedEndpoint, ERROR_ALL_ENDPOINTS_FAILED),
+      createFailureResult({
+        lastResponse: state.lastResponse,
+        lastUsedEndpoint: state.lastUsedEndpoint,
+        error: ERROR_ALL_ENDPOINTS_FAILED,
+        errorCode: 'MAX_RETRIES',
+        totalAttempts: state.attempt,
+      }),
     );
   }
 
-  const selected: RegionAwareEndpointResult | null = selectRegionAwareEndpoint({
-    endpoints: state.endpoints,
-    triedRegions: state.triedRegions,
-    triedEndpointIndices: state.triedEndpointIndices,
-  });
+  const selected: RegionAwareEndpointResult | null = selectEndpointWithWeights(state);
 
   if (!selected) {
-    // All endpoints tried, fall back to round-robin from the beginning
-    state.triedEndpointIndices.clear();
-    state.triedRegions.clear();
-    const retrySelected: RegionAwareEndpointResult | null = selectRegionAwareEndpoint({
-      endpoints: state.endpoints,
-      triedRegions: state.triedRegions,
-      triedEndpointIndices: state.triedEndpointIndices,
-    });
-    if (!retrySelected) {
-      return Promise.resolve(
-        createFailureResult(
-          state.lastResponse,
-          state.lastUsedEndpoint,
-          ERROR_NO_ENDPOINTS_AVAILABLE,
-        ),
-      );
-    }
-    return regionAwareRetryAttemptWithSelected(state, retrySelected);
+    return handleRoundRobinReset(state);
   }
 
   return regionAwareRetryAttemptWithSelected(state, selected);
+};
+
+// Handle timeout branch of retry attempt
+const handleTimeoutRetry = (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+  result: FetchAttemptResult,
+): Promise<FetchRetryResult> => {
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log('[ip-rotate]', {
+    event: 'retry',
+    attempt: state.attempt,
+    endpoint: result.usedEndpoint,
+    reason: 'timeout',
+  });
+  // G-4: Record timeout for cross-request deprioritization
+  recordEndpointFailure({
+    counters: state.params.counters,
+    domain: state.params.targetUrl.host,
+    index: selected.index,
+  });
+  updateHealthScore({
+    counters: state.params.counters,
+    domain: state.params.targetUrl.host,
+    index: selected.index,
+    isSuccess: false,
+  });
+  return regionAwareRetryAttempt({
+    ...state,
+    attempt: state.attempt + 1,
+    lastUsedEndpoint: result.usedEndpoint,
+    consecutiveThrottles: 0,
+  });
+};
+
+// Handle 5xx server error branch of retry attempt
+const handleServerErrorRetry = (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+  result: FetchAttemptResult,
+): Promise<FetchRetryResult> => {
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log('[ip-rotate]', {
+    event: 'retry',
+    attempt: state.attempt,
+    endpoint: result.usedEndpoint,
+    reason: 'server-error',
+    status: result.response?.status,
+  });
+  state.serverErrorEndpoints.add(selected.index);
+  // G-1: Record failure for cross-request deprioritization
+  recordEndpointFailure({
+    counters: state.params.counters,
+    domain: state.params.targetUrl.host,
+    index: selected.index,
+  });
+  updateHealthScore({
+    counters: state.params.counters,
+    domain: state.params.targetUrl.host,
+    index: selected.index,
+    isSuccess: false,
+  });
+  // G-2: Extend retry budget
+  const extendedMaxRetries: number = Math.min(
+    state.maxRetries + EXTRA_RETRIES_PER_BLACKLIST,
+    state.endpoints.length * MAX_RETRIES_MULTIPLIER,
+  );
+  return regionAwareRetryAttempt({
+    ...state,
+    attempt: state.attempt + 1,
+    lastResponse: result.response,
+    lastUsedEndpoint: result.usedEndpoint,
+    maxRetries: extendedMaxRetries,
+    consecutiveThrottles: 0,
+  });
+};
+
+// Handle 429 throttled branch of retry attempt
+const handleThrottledRetry = async (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+  result: FetchAttemptResult,
+): Promise<FetchRetryResult> => {
+  const domain: string = state.params.targetUrl.host;
+  // Record throttle for cross-request deprioritization
+  recordEndpointThrottle({
+    counters: state.params.counters,
+    domain,
+    index: selected.index,
+  });
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log('[ip-rotate]', {
+    event: 'endpoint-throttled',
+    domain,
+    index: selected.index,
+    endpoint: result.usedEndpoint,
+  });
+  updateHealthScore({
+    counters: state.params.counters,
+    domain,
+    index: selected.index,
+    isSuccess: false,
+    isThrottle: true,
+  });
+  const throttleDelay: number = calculateThrottleDelay(
+    state.consecutiveThrottles,
+    state.tuning.throttleBaseDelayMs,
+  );
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log('[ip-rotate]', {
+    event: 'retry',
+    attempt: state.attempt,
+    endpoint: result.usedEndpoint,
+    reason: 'throttled',
+    delayMs: throttleDelay,
+  });
+  await waitMs(throttleDelay);
+  return regionAwareRetryAttempt({
+    ...state,
+    attempt: state.attempt + 1,
+    lastResponse: result.response,
+    lastUsedEndpoint: result.usedEndpoint,
+    consecutiveThrottles: state.consecutiveThrottles + 1,
+  });
+};
+
+// Hedge eligibility check
+const isHedgeEligible = (state: RegionAwareRetryState): boolean => {
+  if (
+    state.hedgeAttemptsUsed >= state.tuning.maxHedgeAttempts ||
+    state.attempt + HEDGE_ATTEMPT_COST > state.maxRetries
+  ) {
+    return false;
+  }
+  if (shouldSuppressHedge(state)) {
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log('[ip-rotate]', {
+      event: 'hedge-suppressed',
+      domain: state.params.targetUrl.host,
+      throttledCount: getRecentlyThrottledIndices({
+        counters: state.params.counters,
+        domain: state.params.targetUrl.host,
+        endpointCount: state.endpoints.length,
+        throttleTtlMs: state.tuning.throttleTtlMs,
+      }).size,
+      threshold: state.tuning.hedgeSuppressThreshold,
+    });
+    return false;
+  }
+  return true;
+};
+
+// Abort the losing fetch in a hedge race and prevent unhandled rejection
+const abortHedgeLoser = (winner: HedgeRaceEntry, ctx: HedgeRaceContext): void => {
+  if (winner.isPrimary) {
+    ctx.hedgeAbort.abort();
+    ctx.hedgePromise.catch(() => {});
+    return;
+  }
+  ctx.primaryAbort.abort();
+  ctx.primaryPromise.catch(() => {});
+};
+
+// Race primary vs hedge fetch and return winner
+const raceHedgeFetches = async (params: RaceHedgeFetchesParams): Promise<HedgedFetchResult> => {
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log('[ip-rotate]', { event: 'hedge-fired', attempt: params.state.attempt });
+  const hedgeAbort: AbortController = new AbortController();
+  const hedgePromise: Promise<FetchAttemptResult> = tryRegionAwareFetch(
+    params.state,
+    params.hedgeSelected,
+    hedgeAbort.signal,
+  );
+  const winner: HedgeRaceEntry = await Promise.race([
+    params.primaryPromise.then(
+      (r: FetchAttemptResult): HedgeRaceEntry => ({ result: r, isPrimary: true }),
+    ),
+    hedgePromise.then((r: FetchAttemptResult): HedgeRaceEntry => ({ result: r, isPrimary: false })),
+  ]);
+  abortHedgeLoser(winner, {
+    primaryAbort: params.primaryAbort,
+    hedgeAbort,
+    primaryPromise: params.primaryPromise,
+    hedgePromise,
+  });
+  const winnerSelected: RegionAwareEndpointResult = winner.isPrimary
+    ? params.primarySelected
+    : params.hedgeSelected;
+  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+  console.log('[ip-rotate]', {
+    event: 'hedge-won',
+    winner: winner.isPrimary ? 'primary' : 'hedge',
+    attempt: params.state.attempt,
+  });
+  return { result: winner.result, selected: winnerSelected, hedgeStarted: true };
+};
+
+// Hedged fetch: race primary vs delayed hedge request
+const tryHedgedFetch = async (
+  state: RegionAwareRetryState,
+  primarySelected: RegionAwareEndpointResult,
+  hedgeSelected: RegionAwareEndpointResult,
+): Promise<HedgedFetchResult> => {
+  const primaryAbort: AbortController = new AbortController();
+  const primaryPromise: Promise<FetchAttemptResult> = tryRegionAwareFetch(
+    state,
+    primarySelected,
+    primaryAbort.signal,
+  );
+  // Phase 1: Race primary completion vs adaptive hedge delay timer
+  const hedgeDelay: number = getAdaptiveHedgeDelay({
+    counters: state.params.counters,
+    domain: state.params.targetUrl.host,
+    endpointCount: state.endpoints.length,
+    defaultDelayMs: state.tuning.hedgeDelayMs,
+  });
+  const earlyResult: FetchAttemptResult | null = await Promise.race([
+    primaryPromise.then((r: FetchAttemptResult): FetchAttemptResult => r),
+    waitMs(hedgeDelay).then((): null => null),
+  ]);
+  // Primary completed before hedge delay - no hedge needed
+  if (earlyResult) {
+    return { result: earlyResult, selected: primarySelected, hedgeStarted: false };
+  }
+  // Phase 2: Start hedge and race
+  return raceHedgeFetches({
+    state,
+    primarySelected,
+    hedgeSelected,
+    primaryAbort,
+    primaryPromise,
+  });
+};
+
+// Process fetch attempt result through retry handlers
+const processRetryResult = (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+  result: FetchAttemptResult,
+): Promise<FetchRetryResult> => {
+  if (result.timedOut) {
+    return handleTimeoutRetry(state, selected, result);
+  }
+  if (result.response && !isRetriableStatus(result.response.status)) {
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log('[ip-rotate]', {
+      event: 'success',
+      attempt: state.attempt,
+      endpoint: result.usedEndpoint,
+      status: result.response.status,
+    });
+    updateHealthScore({
+      counters: state.params.counters,
+      domain: state.params.targetUrl.host,
+      index: selected.index,
+      isSuccess: true,
+    });
+    return Promise.resolve(createSuccessResult(result.response, result.usedEndpoint));
+  }
+  if (result.response && isServerErrorStatus(result.response.status)) {
+    return handleServerErrorRetry(state, selected, result);
+  }
+  return handleThrottledRetry(state, selected, result);
+};
+
+// Mark hedge endpoint as tried and compute state adjustment
+const applyHedgeResult = (
+  state: RegionAwareRetryState,
+  hedged: HedgedFetchResult,
+  hedgeEndpoint: RegionAwareEndpointResult,
+): RegionAwareRetryState => {
+  if (!hedged.hedgeStarted) return state;
+  state.triedEndpointIndices.add(hedgeEndpoint.index);
+  if (hedgeEndpoint.region) {
+    state.triedRegions.add(hedgeEndpoint.region);
+  }
+  return { ...state, attempt: state.attempt + 1, hedgeAttemptsUsed: state.hedgeAttemptsUsed + 1 };
+};
+
+// Try hedged fetch if eligible, otherwise return null
+const tryHedgedAttempt = async (
+  state: RegionAwareRetryState,
+  selected: RegionAwareEndpointResult,
+): Promise<FetchRetryResult | null> => {
+  if (!isHedgeEligible(state)) return null;
+  const hedgeEndpoint: RegionAwareEndpointResult | null = selectEndpointWithWeights(state);
+  if (!hedgeEndpoint) return null;
+  const hedged: HedgedFetchResult = await tryHedgedFetch(state, selected, hedgeEndpoint);
+  const hedgeState: RegionAwareRetryState = applyHedgeResult(state, hedged, hedgeEndpoint);
+  return processRetryResult(hedgeState, hedged.selected, hedged.result);
 };
 
 const regionAwareRetryAttemptWithSelected = async (
@@ -292,48 +860,27 @@ const regionAwareRetryAttemptWithSelected = async (
   if (selected.region) {
     state.triedRegions.add(selected.region);
   }
-
-  const result = await tryRegionAwareFetch(state, selected);
-
-  if (result.timedOut) {
-    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
-    console.log(
-      `[ip-rotate] retry attempt=${state.attempt} endpoint=${result.usedEndpoint} reason=timeout`,
-    );
-    const newTimeout: number = adjustTimeoutOnFailure(state.currentTimeoutMs, state.timeoutConfig);
-    return regionAwareRetryAttempt({
-      ...state,
-      attempt: state.attempt + 1,
-      lastUsedEndpoint: result.usedEndpoint,
-      currentTimeoutMs: newTimeout,
-    });
-  }
-
-  if (result.response && !isErrorStatus(result.response.status)) {
-    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
-    console.log(`[ip-rotate] success attempt=${state.attempt} endpoint=${result.usedEndpoint}`);
-    return createSuccessResult(result.response, result.usedEndpoint);
-  }
-
-  // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
-  console.log(
-    `[ip-rotate] retry attempt=${state.attempt} endpoint=${result.usedEndpoint} reason=error-status`,
-  );
-  const newTimeout: number = adjustTimeoutOnFailure(state.currentTimeoutMs, state.timeoutConfig);
-  return regionAwareRetryAttempt({
-    ...state,
-    attempt: state.attempt + 1,
-    lastResponse: result.response,
-    lastUsedEndpoint: result.usedEndpoint,
-    currentTimeoutMs: newTimeout,
-  });
+  // Try hedged fetch if eligible
+  const hedgedResult: FetchRetryResult | null = await tryHedgedAttempt(state, selected);
+  if (hedgedResult) return hedgedResult;
+  // Normal (non-hedged) fetch
+  const result: FetchAttemptResult = await tryRegionAwareFetch(state, selected);
+  return processRetryResult(state, selected, result);
 };
 
 const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult> => {
   const endpointCount: number = getEndpointCount(params.config, params.targetUrl.host);
 
   if (endpointCount === 0) {
-    return Promise.resolve(createFailureResult(null, null, ERROR_NO_ENDPOINTS_AVAILABLE));
+    return Promise.resolve(
+      createFailureResult({
+        lastResponse: null,
+        lastUsedEndpoint: null,
+        error: ERROR_NO_ENDPOINTS_AVAILABLE,
+        errorCode: 'NO_ENDPOINTS',
+        totalAttempts: 0,
+      }),
+    );
   }
 
   const endpoints: readonly EndpointWithApiKey[] =
@@ -342,6 +889,15 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
   const initialTimeout: number =
     params.timeoutMs ?? getDefaultTimeoutFromEnv(params.envDefaultTimeoutMs);
   const timeoutConfig: TimeoutConfig = defaultTimeoutConfig;
+  const tuning: ResolvedTuning = resolveTuning(params);
+
+  // G-1: Pre-populate triedEndpointIndices with recently failed endpoints
+  const recentlyFailed: Set<number> = getRecentlyFailedIndices({
+    counters: params.counters,
+    domain: params.targetUrl.host,
+    endpointCount: endpoints.length,
+    healthTtlMs: tuning.healthTtlMs,
+  });
 
   return regionAwareRetryAttempt({
     params,
@@ -353,16 +909,23 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
     currentTimeoutMs: clampTimeout(initialTimeout, timeoutConfig),
     timeoutConfig,
     triedRegions: new Set<string>(),
-    triedEndpointIndices: new Set<number>(),
+    triedEndpointIndices: recentlyFailed,
+    serverErrorEndpoints: new Set<number>(),
     wallClockSignal: params.wallClockSignal,
+    consecutiveThrottles: 0,
+    hedgeAttemptsUsed: 0,
+    tuning,
   });
 };
 
 export {
-  adjustTimeoutOnFailure,
-  adjustTimeoutOnSuccess,
+  ACCEPT_ENCODING_IDENTITY,
+  buildHealthKey,
+  buildThrottleKey,
   calculateMaxRetries,
+  calculateThrottleDelay,
   clampTimeout,
+  DEFAULT_HEDGE_DELAY_MS,
   DEFAULT_TIMEOUT_MS,
   defaultTimeoutConfig,
   ENV_DEFAULT_TIMEOUT,
@@ -370,16 +933,37 @@ export {
   ERROR_NO_ENDPOINTS_AVAILABLE,
   ERROR_REQUEST_TIMEOUT,
   ERROR_WALL_CLOCK_TIMEOUT,
+  EXTRA_RETRIES_PER_BLACKLIST,
   fetchWithAuth,
   fetchWithRetry,
   getDefaultTimeoutFromEnv,
-  isErrorStatus,
+  getRecentlyFailedIndices,
+  getRecentlyThrottledIndices,
+  HEALTH_TTL_MS,
+  HEDGE_ATTEMPT_COST,
+  HEDGE_SUPPRESS_THRESHOLD,
   isRetriableError,
+  isRetriableStatus,
+  isServerErrorStatus,
   isTimeoutError,
+  MAX_HEDGE_ATTEMPTS,
+  MAX_RETRIES_MULTIPLIER,
   MAX_TIMEOUT_MS,
   MIN_RETRIES,
   MIN_TIMEOUT_MS,
   parseEnvTimeout,
-  STATUS_ERROR_THRESHOLD,
-  TIMEOUT_ADJUSTMENT_MS,
+  parsePositiveIntEnv,
+  recordEndpointFailure,
+  recordEndpointThrottle,
+  resolveTuning,
+  STATUS_SERVER_ERROR_START,
+  STATUS_TOO_MANY_REQUESTS,
+  stripCompressionEncoding,
+  THROTTLE_BACKOFF_MULTIPLIER,
+  THROTTLE_BASE_DELAY_MS,
+  THROTTLE_JITTER_RATIO,
+  THROTTLE_MAX_DELAY_MS,
+  THROTTLE_TTL_MS,
+  TIMEOUT_BOOST_PER_BLACKLIST_MS,
+  waitMs,
 };
