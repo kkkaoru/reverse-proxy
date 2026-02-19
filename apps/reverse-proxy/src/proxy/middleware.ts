@@ -3,6 +3,8 @@
 
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import { getEndpointCount } from '../ip-rotate/client.ts';
+import { syncHealthToCounters } from '../ip-rotate/health-sync.ts';
 import type { IpRotateConfig } from '../ip-rotate/types.ts';
 import { logEvent } from './cache.ts';
 import {
@@ -25,24 +27,34 @@ import type {
 } from './types.ts';
 import { buildTargetUrl, extractRawQuery } from './url.ts';
 
+interface CachedConfigEntry {
+  readonly config: IpRotateConfig;
+  readonly cachedAt: number;
+}
+
 // Module-level counter for IP rotation round-robin
 const ipRotateCounters: Map<string, number> = new Map();
 
 // Module-level cache for IP rotation config loaded from KV
-const ipRotateConfigCache: Map<string, IpRotateConfig> = new Map();
-const IP_ROTATE_CONFIG_KEY = 'default';
+const ipRotateConfigCache: Map<string, CachedConfigEntry> = new Map();
+const IP_ROTATE_CONFIG_KEY: string = 'default';
+const CONFIG_CACHE_TTL_MS: number = 300000;
 
-// Load IP rotation config with module-level caching
+// Check if cached entry is still valid
+const isCacheValid = (entry: CachedConfigEntry | undefined): entry is CachedConfigEntry =>
+  entry !== undefined && Date.now() - entry.cachedAt < CONFIG_CACHE_TTL_MS;
+
+// Load IP rotation config with TTL-based caching
 const getOrLoadIpRotateConfig = async (
   env: ProxyCacheEnv,
-  cache: Map<string, IpRotateConfig>,
+  cache: Map<string, CachedConfigEntry>,
 ): Promise<IpRotateConfig | undefined> => {
-  const cached: IpRotateConfig | undefined = cache.get(IP_ROTATE_CONFIG_KEY);
-  if (cached) return cached;
+  const cached: CachedConfigEntry | undefined = cache.get(IP_ROTATE_CONFIG_KEY);
+  if (isCacheValid(cached)) return cached.config;
 
   const config: IpRotateConfig | undefined = await resolveIpRotateConfig(env);
   if (config) {
-    cache.set(IP_ROTATE_CONFIG_KEY, config);
+    cache.set(IP_ROTATE_CONFIG_KEY, { config, cachedAt: Date.now() });
   }
   return config;
 };
@@ -54,6 +66,39 @@ const handlePostRequest = async (
 ): Promise<Response> => {
   const body: unknown = await c.req.json().catch((): null => null);
   return batchHandler(body);
+};
+
+// Sync health state from Durable Object / Cache API into local counters
+interface SyncHealthFromDoParams {
+  readonly ipRotateConfig: IpRotateConfig | undefined;
+  readonly healthCoordinator: DurableObjectNamespace | undefined;
+  readonly targetQuery: string | undefined;
+}
+
+const syncHealthFromDo = async (params: SyncHealthFromDoParams): Promise<void> => {
+  if (!(params.ipRotateConfig && params.healthCoordinator && params.targetQuery)) return;
+  try {
+    const targetUrl: URL = new URL(params.targetQuery);
+    const endpointCount: number = getEndpointCount(params.ipRotateConfig, targetUrl.host);
+    if (endpointCount <= 0) return;
+    await syncHealthToCounters({
+      healthCoordinator: params.healthCoordinator,
+      counters: ipRotateCounters,
+      domain: targetUrl.host,
+      endpointCount,
+    });
+  } catch {
+    // Invalid URL, skip sync
+  }
+};
+
+// Safely get execution context (throws in test environments without Workers runtime)
+const getExecutionCtx = (c: Context): ExecutionContext | undefined => {
+  try {
+    return c.executionCtx;
+  } catch {
+    return undefined;
+  }
 };
 
 // Handle query-based request (GET/HEAD/DELETE)
@@ -89,12 +134,23 @@ export const createProxyCacheMiddleware = (
       c.env,
       ipRotateConfigCache,
     );
-    const options: ProxyCacheOptions = createOptionsFromEnv({
-      staticOptions,
-      env: c.env,
-      counters: ipRotateCounters,
+
+    // Sync health state from Durable Object / Cache API into local counters
+    await syncHealthFromDo({
       ipRotateConfig,
+      healthCoordinator: c.env.HEALTH_COORDINATOR,
+      targetQuery: c.req.query(QUERY_KEY_TARGET),
     });
+
+    const options: ProxyCacheOptions = {
+      ...createOptionsFromEnv({
+        staticOptions,
+        env: c.env,
+        counters: ipRotateCounters,
+        ipRotateConfig,
+      }),
+      executionCtx: getExecutionCtx(c),
+    };
     const { queryHandlers, batchHandler } = createHandlerMaps(options);
 
     // Handle POST for batch requests
@@ -112,3 +168,12 @@ export const createProxyCacheMiddleware = (
 
     return handleQueryRequest(c, options, handler);
   });
+
+export {
+  CONFIG_CACHE_TTL_MS,
+  getExecutionCtx,
+  getOrLoadIpRotateConfig,
+  isCacheValid,
+  syncHealthFromDo,
+};
+export type { CachedConfigEntry, SyncHealthFromDoParams };
