@@ -115,25 +115,29 @@ export const convertResponseToUtf8 = async (response: Response): Promise<Respons
     return response;
   }
 
-  const headerCharset: string | null = extractCharsetFromContentType(contentType);
-  if (headerCharset && isUtf8Encoding(headerCharset)) {
+  try {
+    const headerCharset: string | null = extractCharsetFromContentType(contentType);
+    if (headerCharset && isUtf8Encoding(headerCharset)) {
+      return response;
+    }
+
+    const bytes: Uint8Array = new Uint8Array(await response.clone().arrayBuffer());
+    const latin1Html: string = iconv.decode(Buffer.from(bytes), LATIN1_ENCODING);
+    const detection: EncodingDetectionResult = detectEncodingFromHtml(latin1Html);
+    const encoding: string = headerCharset ?? detection.encoding;
+
+    if (isUtf8Encoding(encoding)) {
+      return response;
+    }
+
+    if (!iconv.encodingExists(encoding)) {
+      return response;
+    }
+
+    return createConvertedResponse({ response, bytes, encoding });
+  } catch {
     return response;
   }
-
-  const bytes: Uint8Array = new Uint8Array(await response.clone().arrayBuffer());
-  const latin1Html: string = iconv.decode(Buffer.from(bytes), LATIN1_ENCODING);
-  const detection: EncodingDetectionResult = detectEncodingFromHtml(latin1Html);
-  const encoding: string = headerCharset ?? detection.encoding;
-
-  if (isUtf8Encoding(encoding)) {
-    return response;
-  }
-
-  if (!iconv.encodingExists(encoding)) {
-    return response;
-  }
-
-  return createConvertedResponse({ response, bytes, encoding });
 };
 
 export const detectEncodingFromHtmlForTest = (html: string): EncodingDetectionResult =>

@@ -212,3 +212,17 @@ it('convertResponseToUtf8 returns original when html meta says utf-8', async () 
   const converted: Response = await convertResponseToUtf8(response);
   expect(await converted.text()).toBe(html);
 });
+
+it('convertResponseToUtf8 does not throw on conversion error and returns original response', async () => {
+  // Create a response with HTML content-type but body that will cause iconv issues
+  const badBytes: Blob = new Blob([new Uint8Array([0xff, 0xfe, 0x00, 0x01, 0x80, 0x90])]);
+  const response: Response = new Response(badBytes, {
+    status: 502,
+    statusText: 'Bad Gateway',
+    headers: { 'content-type': 'text/html; charset=totally-invalid-encoding-xyz' },
+  });
+  const converted: Response = await convertResponseToUtf8(response);
+  // Should return without throwing, preserving original status
+  expect(converted.status).toBe(502);
+  expect(converted.statusText).toBe('Bad Gateway');
+});
