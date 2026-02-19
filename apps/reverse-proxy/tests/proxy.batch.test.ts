@@ -193,11 +193,11 @@ test('takeBatch takes up to 6 items from queue', () => {
     createMockTask(7, false),
   ];
   const batch: FetchTask[] = takeBatch(queue);
-  expect(batch.length).toStrictEqual(6);
-  expect(queue.length).toStrictEqual(2);
+  expect(batch.length).toStrictEqual(3);
+  expect(queue.length).toStrictEqual(5);
 });
 
-test('takeBatch takes all items if less than 6', () => {
+test('takeBatch takes all items if less than 3', () => {
   const queue: FetchTask[] = [createMockTask(0, false), createMockTask(1, false)];
   const batch: FetchTask[] = takeBatch(queue);
   expect(batch.length).toStrictEqual(2);
@@ -376,7 +376,7 @@ test('calculateSubrequestCount returns correct count', () => {
   state.queue.splice(0, 1);
   state.retried.add(0);
   const count: number = calculateSubrequestCount({ state, urlCount: 3 });
-  expect(count).toStrictEqual(2);
+  expect(count).toStrictEqual(6);
 });
 
 // shouldStopExecution tests

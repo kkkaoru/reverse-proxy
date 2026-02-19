@@ -8,6 +8,7 @@ import {
   createBatchExecutionState,
   executeBatchFetch,
   executeSingleBatch,
+  IP_ROTATE_FETCH_FACTOR,
   shouldStopExecution,
 } from './execution.ts';
 
@@ -54,7 +55,7 @@ test('createBatchExecutionState sets correct limits', () => {
     options: createMockOptions(),
   });
   expect(state.limits.maxMemoryBytes).toStrictEqual(104857600);
-  expect(state.limits.maxSubrequests).toStrictEqual(1000);
+  expect(state.limits.maxSubrequests).toStrictEqual(10000);
 });
 
 // calculateSubrequestCount tests
@@ -67,17 +68,17 @@ test('calculateSubrequestCount returns correct count for initial state', () => {
   expect(count).toStrictEqual(0);
 });
 
-test('calculateSubrequestCount accounts for processed items', () => {
+test('calculateSubrequestCount accounts for processed items with fetch factor', () => {
   const state: BatchExecutionState = createBatchExecutionState({
     urls: ['https://a.com', 'https://b.com', 'https://c.com'],
     options: createMockOptions(),
   });
   state.queue.splice(0, 1);
   const count: number = calculateSubrequestCount({ state, urlCount: 3 });
-  expect(count).toStrictEqual(1);
+  expect(count).toStrictEqual(3);
 });
 
-test('calculateSubrequestCount accounts for retried items', () => {
+test('calculateSubrequestCount accounts for retried items with fetch factor', () => {
   const state: BatchExecutionState = createBatchExecutionState({
     urls: ['https://a.com', 'https://b.com', 'https://c.com'],
     options: createMockOptions(),
@@ -85,7 +86,11 @@ test('calculateSubrequestCount accounts for retried items', () => {
   state.queue.splice(0, 1);
   state.retried.add(0);
   const count: number = calculateSubrequestCount({ state, urlCount: 3 });
-  expect(count).toStrictEqual(2);
+  expect(count).toStrictEqual(6);
+});
+
+test('IP_ROTATE_FETCH_FACTOR is 3', () => {
+  expect(IP_ROTATE_FETCH_FACTOR).toStrictEqual(3);
 });
 
 // shouldStopExecution tests

@@ -38,7 +38,7 @@ test('createInitialQueue creates tasks with isRetry false', () => {
 });
 
 // takeBatch tests
-test('takeBatch takes up to 6 items from queue', () => {
+test('takeBatch takes up to 3 items from queue', () => {
   const queue: FetchTask[] = [
     { url: 'https://0.com', index: 0, isRetry: false },
     { url: 'https://1.com', index: 1, isRetry: false },
@@ -50,11 +50,11 @@ test('takeBatch takes up to 6 items from queue', () => {
     { url: 'https://7.com', index: 7, isRetry: false },
   ];
   const batch: FetchTask[] = takeBatch(queue);
-  expect(batch.length).toStrictEqual(6);
-  expect(queue.length).toStrictEqual(2);
+  expect(batch.length).toStrictEqual(3);
+  expect(queue.length).toStrictEqual(5);
 });
 
-test('takeBatch takes all items if less than 6', () => {
+test('takeBatch takes all items if less than 3', () => {
   const queue: FetchTask[] = [
     { url: 'https://0.com', index: 0, isRetry: false },
     { url: 'https://1.com', index: 1, isRetry: false },
