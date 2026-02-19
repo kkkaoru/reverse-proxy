@@ -5,6 +5,7 @@ import type {
   EndpointWithApiKey,
   GetEndpointParams,
   GetNextEndpointResult,
+  IndexedEndpoint,
   IpRotateAuth,
   IpRotateConfig,
   IpRotateEndpoints,
@@ -126,37 +127,72 @@ const extractRegionFromEndpoint = (endpoint: string): string | null => {
 const pickRandomElement = <T>(items: readonly T[]): T | undefined =>
   items.length === 0 ? undefined : items[Math.floor(Math.random() * items.length)];
 
+// Build cumulative weight sums for weighted random selection
+const buildCumulativeWeights = (weights: readonly number[]): readonly number[] =>
+  weights.map((_: number, i: number) =>
+    weights.slice(0, i + 1).reduce((sum: number, w: number) => sum + w, 0),
+  );
+
+// Extract weights for candidate subset from full endpoint weights array
+const extractCandidateWeights = (
+  candidates: readonly IndexedEndpoint[],
+  weights: readonly number[] | undefined,
+): readonly number[] | undefined =>
+  weights ? candidates.map(({ index }: IndexedEndpoint) => weights.at(index) ?? 1) : undefined;
+
+// Pick a random element with optional weights (falls back to uniform random)
+const pickWeightedRandomElement = <T>(
+  items: readonly T[],
+  weights?: readonly number[],
+): T | undefined => {
+  if (items.length === 0) return undefined;
+  if (!weights) return pickRandomElement(items);
+  const cumulative: readonly number[] = buildCumulativeWeights(weights);
+  const total: number = cumulative.at(-1) ?? 0;
+  if (total === 0) return pickRandomElement(items);
+  const target: number = Math.random() * total;
+  const selectedIndex: number = cumulative.findIndex((cw: number) => target < cw);
+  return selectedIndex >= 0 ? items.at(selectedIndex) : items.at(items.length - 1);
+};
+
+const toIndexedEndpoint = (ep: EndpointWithApiKey, i: number): IndexedEndpoint => ({
+  endpoint: ep,
+  index: i,
+});
+
+const toRegionResult = (found: IndexedEndpoint): RegionAwareEndpointResult => {
+  const region: string | null = extractRegionFromEndpoint(found.endpoint.endpoint);
+  return { endpoint: found.endpoint, region: region ?? '', index: found.index };
+};
+
 const findEndpointInUntriedRegion = (
   params: SelectRegionAwareEndpointParams,
 ): RegionAwareEndpointResult | null => {
-  const candidates: readonly { endpoint: EndpointWithApiKey; index: number }[] = params.endpoints
-    .map((ep: EndpointWithApiKey, i: number) => ({ endpoint: ep, index: i }))
-    .filter(({ endpoint, index }: { endpoint: EndpointWithApiKey; index: number }): boolean => {
+  const candidates: readonly IndexedEndpoint[] = params.endpoints
+    .map(toIndexedEndpoint)
+    .filter(({ endpoint, index }: IndexedEndpoint): boolean => {
       if (params.triedEndpointIndices.has(index)) return false;
       const region: string | null = extractRegionFromEndpoint(endpoint.endpoint);
       return region !== null && !params.triedRegions.has(region);
     });
-  const found: { endpoint: EndpointWithApiKey; index: number } | undefined =
-    pickRandomElement(candidates);
-  if (!found) return null;
-  const region: string | null = extractRegionFromEndpoint(found.endpoint.endpoint);
-  return { endpoint: found.endpoint, region: region ?? '', index: found.index };
+  const found: IndexedEndpoint | undefined = pickWeightedRandomElement(
+    candidates,
+    extractCandidateWeights(candidates, params.endpointWeights),
+  );
+  return found ? toRegionResult(found) : null;
 };
 
 const findAnyUntriedEndpoint = (
   params: SelectRegionAwareEndpointParams,
 ): RegionAwareEndpointResult | null => {
-  const candidates: readonly { endpoint: EndpointWithApiKey; index: number }[] = params.endpoints
-    .map((ep: EndpointWithApiKey, i: number) => ({ endpoint: ep, index: i }))
-    .filter(
-      ({ index }: { endpoint: EndpointWithApiKey; index: number }): boolean =>
-        !params.triedEndpointIndices.has(index),
-    );
-  const found: { endpoint: EndpointWithApiKey; index: number } | undefined =
-    pickRandomElement(candidates);
-  if (!found) return null;
-  const region: string | null = extractRegionFromEndpoint(found.endpoint.endpoint);
-  return { endpoint: found.endpoint, region: region ?? '', index: found.index };
+  const candidates: readonly IndexedEndpoint[] = params.endpoints
+    .map(toIndexedEndpoint)
+    .filter(({ index }: IndexedEndpoint): boolean => !params.triedEndpointIndices.has(index));
+  const found: IndexedEndpoint | undefined = pickWeightedRandomElement(
+    candidates,
+    extractCandidateWeights(candidates, params.endpointWeights),
+  );
+  return found ? toRegionResult(found) : null;
 };
 
 const selectRegionAwareEndpoint = (
@@ -273,6 +309,7 @@ export {
   AUTH_TYPE_API_KEY,
   AUTH_TYPE_IAM,
   KV_KEY_IP_ROTATE_ENDPOINTS,
+  buildCumulativeWeights,
   buildRewrittenUrl,
   extractRegionFromEndpoint,
   filterEndpointsByBannedRegions,
@@ -284,6 +321,7 @@ export {
   parseBannedRegions,
   parseIpRotateConfig,
   pickRandomElement,
+  pickWeightedRandomElement,
   rewriteUrlForIpRotate,
   selectRegionAwareEndpoint,
 };
