@@ -84,7 +84,7 @@ describe('handleRedirect', () => {
 });
 
 describe('logUpstreamError', () => {
-  it('logs error with response body', async () => {
+  it('logs error with response body when logging enabled', async () => {
     const options: ProxyCacheOptions = createMockOptions({ enableLogging: true });
     const response: Response = new Response('error message', { status: 500 });
 
@@ -93,9 +93,26 @@ describe('logUpstreamError', () => {
       target: new URL('https://example.com'),
       currentUrl: 'https://example.com/path',
       response,
+      enableLogging: true,
     });
 
     expect(true).toBe(true);
+  });
+
+  it('skips body buffering when logging disabled', async () => {
+    const options: ProxyCacheOptions = createMockOptions({ enableLogging: false });
+    const response: Response = new Response('large error body', { status: 500 });
+    const cloneSpy = vi.spyOn(response, 'clone');
+
+    await logUpstreamError({
+      options,
+      target: new URL('https://example.com'),
+      currentUrl: 'https://example.com/path',
+      response,
+      enableLogging: false,
+    });
+
+    expect(cloneSpy).not.toHaveBeenCalled();
   });
 });
 

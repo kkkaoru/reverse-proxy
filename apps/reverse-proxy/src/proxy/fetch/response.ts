@@ -6,8 +6,9 @@ import { ERROR_BODY_SLICE_LENGTH, LOG_EVENT_UPSTREAM_ERROR } from '../constants.
 import type { LogUpstreamErrorParams, ProcessFetchResponseParams } from '../types.ts';
 import { isCacheableStatus } from './status.ts';
 
-// Log upstream error with response body
+// Log upstream error with response body (skip body buffering when logging disabled)
 export const logUpstreamError = async (params: LogUpstreamErrorParams): Promise<void> => {
+  if (!params.enableLogging) return;
   const errorBody: string = await params.response.clone().text();
   logEvent(params.options, LOG_EVENT_UPSTREAM_ERROR, {
     target: params.target.toString(),
@@ -29,6 +30,7 @@ export const processFetchResponse = async (
       target: params.target,
       currentUrl,
       response,
+      enableLogging: params.options.enableLogging,
     });
     return response;
   }
