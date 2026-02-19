@@ -43,6 +43,10 @@ class_name = "EndpointHealthCoordinator"
 tag = "v1"
 new_classes = ["EndpointHealthCoordinator"]
 
+[limits]
+cpu_ms = 300_000
+subrequests = 10_000_000
+
 [observability.logs]
 enabled = true
 head_sampling_rate = 1
