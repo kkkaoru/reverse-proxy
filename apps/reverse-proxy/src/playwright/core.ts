@@ -148,9 +148,9 @@ export const LOG_REQUESTS_ENABLED: string = 'TRUE';
 export const PLAYWRIGHT_PATH: string = '/playwright';
 export const METHOD_GET: string = 'GET';
 export const LOG_EVENT_IP_ROTATE: string = 'ip-rotate-fetch';
-// Wall clock timeout: 100s (20s margin below Cloudflare's 120s Proxy Read Timeout)
+// Wall clock timeout: 80s (40s margin below Cloudflare's 120s Proxy Read Timeout)
 // See: https://developers.cloudflare.com/fundamentals/reference/connection-limits/
-export const WALL_CLOCK_TIMEOUT_MS: number = 100000;
+export const WALL_CLOCK_TIMEOUT_MS: number = 80000;
 
 // IP Rotate functions
 export const parseIpRotateConfigFromEnv = (env: PlaywrightCoreEnv): IpRotateConfig | undefined => {
