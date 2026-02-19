@@ -44,6 +44,9 @@ const DO_INSTANCE_NAME: string = 'default';
 // Module-level cache for Durable Object health state
 const moduleHealthCache: Map<string, ModuleCacheEntry> = new Map();
 
+// Single-flight map to prevent thundering herd on DO requests
+const inflightRequests: Map<string, Promise<void>> = new Map();
+
 // Check if module-level cache entry is fresh
 const isModuleCacheFresh = (entry: ModuleCacheEntry | undefined): entry is ModuleCacheEntry =>
   entry !== undefined && Date.now() - entry.cachedAt < MODULE_CACHE_TTL_MS;
@@ -102,6 +105,29 @@ const fetchFromDurableObject = async (
   populateAndMerge(params.domain, result.counters, params.counters);
 };
 
+// Single-flight DO fetch: coalesce concurrent requests for same domain
+const singleFlightDoFetch = async (
+  params: SyncHealthParams,
+  coordinator: DurableObjectNamespace,
+): Promise<void> => {
+  const existing: Promise<void> | undefined = inflightRequests.get(params.domain);
+  if (existing) {
+    await existing;
+    const freshEntry: ModuleCacheEntry | undefined = moduleHealthCache.get(params.domain);
+    if (freshEntry) {
+      mergeHealthIntoCounters(params.counters, freshEntry.data);
+    }
+    return;
+  }
+  const doPromise: Promise<void> = fetchFromDurableObject(params, coordinator);
+  inflightRequests.set(params.domain, doPromise);
+  try {
+    await doPromise;
+  } finally {
+    inflightRequests.delete(params.domain);
+  }
+};
+
 // Sync health state into local counters from 3-tier cache hierarchy
 const syncHealthToCounters = async (params: SyncHealthParams): Promise<void> => {
   if (!params.healthCoordinator) return;
@@ -127,8 +153,8 @@ const syncHealthToCounters = async (params: SyncHealthParams): Promise<void> => 
       return;
     }
 
-    // Tier 3: Durable Object
-    await fetchFromDurableObject(params, params.healthCoordinator);
+    // Tier 3: Durable Object (single-flight to prevent thundering herd)
+    await singleFlightDoFetch(params, params.healthCoordinator);
   } catch (error: unknown) {
     // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
     console.log(LOG_PREFIX, {
@@ -169,14 +195,16 @@ const reportOutcomeToDO = async (params: ReportOutcomeParams): Promise<void> => 
   }
 };
 
-// Clear module cache (for testing)
+// Clear module cache and inflight requests (for testing)
 const clearModuleHealthCache = (): void => {
   moduleHealthCache.clear();
+  inflightRequests.clear();
 };
 
 export {
   clearModuleHealthCache,
   DO_INSTANCE_NAME,
+  inflightRequests,
   isModuleCacheFresh,
   mergeHealthIntoCounters,
   MODULE_CACHE_TTL_MS,
