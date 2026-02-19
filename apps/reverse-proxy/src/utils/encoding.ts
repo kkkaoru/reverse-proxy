@@ -121,17 +121,18 @@ export const convertResponseToUtf8 = async (response: Response): Promise<Respons
       return response;
     }
 
-    const bytes: Uint8Array = new Uint8Array(await response.clone().arrayBuffer());
+    const arrayBuffer: ArrayBuffer = await response.arrayBuffer();
+    const bytes: Uint8Array = new Uint8Array(arrayBuffer);
     const latin1Html: string = iconv.decode(Buffer.from(bytes), LATIN1_ENCODING);
     const detection: EncodingDetectionResult = detectEncodingFromHtml(latin1Html);
     const encoding: string = headerCharset ?? detection.encoding;
 
-    if (isUtf8Encoding(encoding)) {
-      return response;
-    }
-
-    if (!iconv.encodingExists(encoding)) {
-      return response;
+    if (isUtf8Encoding(encoding) || !iconv.encodingExists(encoding)) {
+      return new Response(arrayBuffer, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     }
 
     return createConvertedResponse({ response, bytes, encoding });
