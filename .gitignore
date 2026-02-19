@@ -157,3 +157,4 @@ temp
 temp.txt
 **/cdk.out
 .serena
+.claude/settings.local.json
