@@ -6,7 +6,7 @@ import { fetchAndCache, performFetch, performStandardFetch } from './fetch/core.
 import { buildFetchHeaders } from './fetch/headers.ts';
 import { performIpRotateFetch, shouldUseIpRotate } from './fetch/ip-rotate.ts';
 import { createTooManyRedirectsResponse, handleRedirect } from './fetch/redirect.ts';
-import { logUpstreamError, processFetchResponse } from './fetch/response.ts';
+import { logUpstreamError, processFetchResponse, storeKvCacheDeferred } from './fetch/response.ts';
 import { isCacheableStatus, isRedirectStatus } from './fetch/status.ts';
 import type { FetchAndCacheParams, ProxyCacheOptions } from './types.ts';
 
@@ -273,20 +273,121 @@ describe('processFetchResponse', () => {
     expect(result.status).toBe(500);
   });
 
-  it('caches response for cacheable status', async () => {
+  it('returns UTF-8 converted response for cacheable status', async () => {
     const params: FetchAndCacheParams = {
       cacheKey: 'test-key',
       kvCacheKey: 'kv-test-key',
       target: new URL('https://example.com'),
       options: createMockOptions(),
     };
-    const response: Response = createMockResponse(200);
+    const response: Response = new Response('test body', {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    });
     const result: Response = await processFetchResponse({
       params,
       response,
       currentUrl: 'https://example.com',
     });
     expect(result.status).toBe(200);
+    expect(await result.text()).toBe('test body');
+  });
+
+  it('puts response into Cache API when enableCacheApi is true', async () => {
+    const mockPut: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('caches', { default: { put: mockPut } });
+    const params: FetchAndCacheParams = {
+      cacheKey: 'cache-key',
+      kvCacheKey: 'kv-test-key',
+      target: new URL('https://example.com'),
+      options: createMockOptions({ enableCacheApi: true }),
+    };
+    const response: Response = new Response('cacheable body', {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    });
+    await processFetchResponse({
+      params,
+      response,
+      currentUrl: 'https://example.com',
+    });
+    expect(mockPut).toHaveBeenCalledTimes(1);
+    expect(mockPut.mock.calls[0]?.[0]).toBe('cache-key');
+  });
+});
+
+describe('storeKvCacheDeferred', () => {
+  it('does nothing when kv is undefined', () => {
+    const params: FetchAndCacheParams = {
+      cacheKey: 'ck',
+      kvCacheKey: 'kvk',
+      target: new URL('https://example.com'),
+      options: createMockOptions(),
+    };
+    const converted = {
+      text: 'body',
+      contentType: 'text/plain',
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+    };
+    storeKvCacheDeferred(params, converted);
+    // No error thrown
+  });
+
+  it('calls waitUntil when executionCtx is provided', () => {
+    const mockWaitUntil: ReturnType<typeof vi.fn> = vi.fn();
+    const mockKv = {
+      get: vi.fn(),
+      put: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn(),
+      list: vi.fn(),
+    };
+    const params: FetchAndCacheParams = {
+      cacheKey: 'ck',
+      kvCacheKey: 'kvk',
+      target: new URL('https://example.com'),
+      options: createMockOptions({
+        kv: mockKv as unknown as KVNamespace,
+        executionCtx: {
+          waitUntil: mockWaitUntil,
+          passThroughOnException: vi.fn(),
+        } as unknown as ExecutionContext,
+      }),
+    };
+    const converted = {
+      text: 'body',
+      contentType: 'text/plain',
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+    };
+    storeKvCacheDeferred(params, converted);
+    expect(mockWaitUntil).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires and forgets when executionCtx is not provided but kv is', () => {
+    const mockKv = {
+      get: vi.fn(),
+      put: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn(),
+      list: vi.fn(),
+    };
+    const params: FetchAndCacheParams = {
+      cacheKey: 'ck',
+      kvCacheKey: 'kvk',
+      target: new URL('https://example.com'),
+      options: createMockOptions({ kv: mockKv as unknown as KVNamespace }),
+    };
+    const converted = {
+      text: 'body',
+      contentType: 'text/plain',
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+    };
+    storeKvCacheDeferred(params, converted);
+    // No error thrown, KV put will be called asynchronously
   });
 });
 

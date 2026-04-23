@@ -1,7 +1,6 @@
 // Proxy cache operations
 // Execute with bun: wrangler dev
 
-import { convertResponseToUtf8 } from '../utils/encoding.ts';
 import {
   CACHE_TTL_SECONDS,
   HEADER_CONTENT_TYPE,
@@ -19,6 +18,10 @@ import type {
   ProxyCacheOptions,
   SetKvCacheParams,
 } from './types.ts';
+
+interface HasHeaders {
+  readonly headers: Headers;
+}
 
 // Logging
 export const logEvent = (
@@ -61,9 +64,9 @@ export const setKvCachedContent = (params: SetKvCacheParams): Promise<void> =>
     expirationTtl: CACHE_TTL_SECONDS,
   });
 
-// Response header sanitization
-export const sanitizeResponseHeaders = (response: Response): Headers => {
-  const headers: Headers = new Headers(response.headers);
+// Response header sanitization (accepts Response or Utf8TextResult)
+export const sanitizeResponseHeaders = (source: HasHeaders): Headers => {
+  const headers: Headers = new Headers(source.headers);
   headers.delete(HEADER_SET_COOKIE);
   return headers;
 };
@@ -79,18 +82,15 @@ export const cacheResponse = async (cacheKey: string, response: Response): Promi
   await caches.default.put(cacheKey, cacheable);
 };
 
-// Store response in KV cache
-export const storeInKvCache = async (
+// Store pre-converted UTF-8 text in KV cache (memory-efficient: no clone or re-conversion)
+export const storeKvCacheFromText = async (
   params: FetchAndCacheParams,
-  response: Response,
+  content: string,
+  contentType: string,
 ): Promise<void> => {
   if (!params.options.kv) {
     return;
   }
-
-  const convertedResponse: Response = await convertResponseToUtf8(response.clone());
-  const content: string = await convertedResponse.text();
-  const contentType: string = convertedResponse.headers.get(HEADER_CONTENT_TYPE) ?? '';
 
   await setKvCachedContent({
     kv: params.options.kv,

@@ -1,7 +1,8 @@
 // Batch single URL fetch
 // Execute with bun: wrangler dev
 
-import { convertResponseToUtf8 } from '../../../utils/encoding.ts';
+import type { Utf8TextResult } from '../../../utils/encoding.ts';
+import { convertResponseToUtf8Text } from '../../../utils/encoding.ts';
 import { createKvCacheKey, logEvent, setKvCachedContent, tryGetKvCache } from '../../cache.ts';
 import {
   ERROR_FETCH_FAILED,
@@ -29,6 +30,13 @@ import type {
 } from '../../types.ts';
 import { validateUrlWithSsrf } from '../../url.ts';
 
+interface StoreInKvCacheParams {
+  url: string;
+  body: string;
+  contentType: string;
+  options: ProxyCacheOptions;
+}
+
 // Try to get cached result from KV
 const tryGetCachedResult = async (
   url: string,
@@ -53,13 +61,6 @@ const tryGetCachedResult = async (
   };
 };
 
-interface StoreInKvCacheParams {
-  url: string;
-  body: string;
-  contentType: string;
-  options: ProxyCacheOptions;
-}
-
 // Store successful response in KV cache
 const storeInKvCacheForBatch = async (params: StoreInKvCacheParams): Promise<void> => {
   if (!params.options.kv) {
@@ -75,6 +76,17 @@ const storeInKvCacheForBatch = async (params: StoreInKvCacheParams): Promise<voi
   });
 
   logEvent(params.options, LOG_EVENT_KV_CACHE_SET, { target: params.url, cacheKey: kvCacheKey });
+};
+
+// Defer KV cache write using waitUntil when available
+const storeKvCacheDeferredForBatch = (params: StoreInKvCacheParams): void => {
+  if (!params.options.kv) return;
+  const promise: Promise<void> = storeInKvCacheForBatch(params);
+  if (params.options.executionCtx) {
+    params.options.executionCtx.waitUntil(promise);
+    return;
+  }
+  promise.catch(() => {});
 };
 
 // Fetch single URL with SSRF validation and caching
@@ -110,18 +122,21 @@ export const fetchSingleUrl = async (params: SingleFetchParams): Promise<BatchFe
       headers,
       wallClockSignal,
     });
-    const converted: Response = await convertResponseToUtf8(response);
-    const body: string = await converted.text();
-    const contentType: string = converted.headers.get(HEADER_CONTENT_TYPE) ?? '';
+    const converted: Utf8TextResult = await convertResponseToUtf8Text(response);
     const result: BatchResultStatus =
       response.status < STATUS_CLIENT_ERROR_START ? RESULT_SUCCESS : RESULT_ERROR;
 
-    // Store in KV cache if response is cacheable
+    // Store in KV cache if response is cacheable (deferred via waitUntil)
     if (isCacheableStatus(response.status)) {
-      await storeInKvCacheForBatch({ url: params.url, body, contentType, options: params.options });
+      storeKvCacheDeferredForBatch({
+        url: params.url,
+        body: converted.text,
+        contentType: converted.contentType,
+        options: params.options,
+      });
     }
 
-    return { url: params.url, httpStatus: response.status, result, body };
+    return { url: params.url, httpStatus: response.status, result, body: converted.text };
   } catch {
     return {
       url: params.url,

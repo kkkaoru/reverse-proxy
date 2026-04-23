@@ -15,6 +15,14 @@ interface ConvertResponseParams {
   encoding: string;
 }
 
+export interface Utf8TextResult {
+  text: string;
+  contentType: string;
+  status: number;
+  statusText: string;
+  headers: Headers;
+}
+
 // Constants
 const DEFAULT_ENCODING: string = 'utf-8';
 const CHARSET_META_REGEX: RegExp = /<meta[^>]+charset=["']?([^"'\s>]+)/i;
@@ -139,6 +147,72 @@ export const convertResponseToUtf8 = async (response: Response): Promise<Respons
   } catch {
     return response;
   }
+};
+
+interface BytesToUtf8Params {
+  response: Response;
+  arrayBuffer: ArrayBuffer;
+  headerCharset: string | null;
+  contentType: string;
+}
+
+// Build base result from response metadata
+const buildBaseResult = (
+  response: Response,
+  contentType: string,
+): Omit<Utf8TextResult, 'text'> => ({
+  contentType,
+  status: response.status,
+  statusText: response.statusText,
+  headers: response.headers,
+});
+
+// Convert non-UTF-8 bytes to UTF-8 text result
+const convertBytesToUtf8TextResult = (params: BytesToUtf8Params): Utf8TextResult => {
+  const bytes: Uint8Array = new Uint8Array(params.arrayBuffer);
+  const latin1Html: string = iconv.decode(Buffer.from(bytes), LATIN1_ENCODING);
+  const detection: EncodingDetectionResult = detectEncodingFromHtml(latin1Html);
+  const encoding: string = params.headerCharset ?? detection.encoding;
+
+  if (isUtf8Encoding(encoding) || !iconv.encodingExists(encoding)) {
+    return {
+      ...buildBaseResult(params.response, params.contentType),
+      text: new TextDecoder().decode(params.arrayBuffer),
+    };
+  }
+
+  const utf8Content: string = iconv.decode(Buffer.from(bytes), encoding);
+  const headers: Headers = new Headers(params.response.headers);
+  headers.set(CONTENT_TYPE_HEADER, HEADER_CONTENT_TYPE_UTF8);
+  return {
+    text: utf8Content,
+    contentType: HEADER_CONTENT_TYPE_UTF8,
+    status: params.response.status,
+    statusText: params.response.statusText,
+    headers,
+  };
+};
+
+// Convert response to UTF-8 text in a single body read (memory-efficient)
+export const convertResponseToUtf8Text = async (response: Response): Promise<Utf8TextResult> => {
+  const contentType: string = response.headers.get(CONTENT_TYPE_HEADER) ?? '';
+
+  if (!isHtmlContentType(contentType)) {
+    return { ...buildBaseResult(response, contentType), text: await response.text() };
+  }
+
+  const headerCharset: string | null = extractCharsetFromContentType(contentType);
+  if (headerCharset && isUtf8Encoding(headerCharset)) {
+    return { ...buildBaseResult(response, contentType), text: await response.text() };
+  }
+
+  const arrayBuffer: ArrayBuffer = await response.arrayBuffer();
+  return convertBytesToUtf8TextResult({
+    response,
+    arrayBuffer,
+    headerCharset,
+    contentType,
+  });
 };
 
 export const detectEncodingFromHtmlForTest = (html: string): EncodingDetectionResult =>

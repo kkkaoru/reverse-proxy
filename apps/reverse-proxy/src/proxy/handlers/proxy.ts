@@ -14,6 +14,7 @@ import {
 } from '../constants.ts';
 import { getErrorMessage } from '../errors.ts';
 import { fetchAndCache } from '../fetch/core.ts';
+import { isCacheableStatus } from '../fetch/status.ts';
 import { createErrorResponse } from '../responses.ts';
 import type { ParsedUrl, ProxyCacheOptions } from '../types.ts';
 import { parseTargetUrl } from '../url.ts';
@@ -34,7 +35,7 @@ export const handleProxyRequest = async (
   const kvCached: Response | null = await tryGetKvCache(options, target, kvCacheKey);
 
   if (kvCached) {
-    return convertResponseToUtf8(kvCached);
+    return kvCached;
   }
 
   const cacheKey: string = createCacheKey(parsed.value, new Date());
@@ -44,7 +45,7 @@ export const handleProxyRequest = async (
 
     if (cached) {
       logEvent(options, LOG_EVENT_CACHE_HIT, { target });
-      return convertResponseToUtf8(cached.clone());
+      return convertResponseToUtf8(cached);
     }
   }
 
@@ -58,7 +59,10 @@ export const handleProxyRequest = async (
       options,
     });
     logEvent(options, LOG_EVENT_FETCH_STATUS, { target, status: upstreamResponse.status });
-    return convertResponseToUtf8(upstreamResponse);
+    // Cacheable responses are already UTF-8 converted by processFetchResponse
+    return isCacheableStatus(upstreamResponse.status)
+      ? upstreamResponse
+      : convertResponseToUtf8(upstreamResponse);
   } catch (error: unknown) {
     const message: string = getErrorMessage(error);
     logEvent(options, LOG_EVENT_FETCH_ERROR, { target, error: message });

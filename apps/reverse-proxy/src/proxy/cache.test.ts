@@ -16,7 +16,7 @@ import {
   parseKvCachedContent,
   sanitizeResponseHeaders,
   setKvCachedContent,
-  storeInKvCache,
+  storeKvCacheFromText,
   tryGetKvCache,
 } from './cache.ts';
 import type {
@@ -254,9 +254,9 @@ test('createKvCacheResponse creates response with content and content-type', () 
   expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
 });
 
-// --- storeInKvCache ---
+// --- storeKvCacheFromText ---
 
-test('storeInKvCache returns early when kv is undefined', async () => {
+test('storeKvCacheFromText returns early when kv is undefined', async () => {
   const options: ProxyCacheOptions = createMockOptions({ kv: undefined });
   const params: FetchAndCacheParams = {
     cacheKey: 'ck',
@@ -265,11 +265,11 @@ test('storeInKvCache returns early when kv is undefined', async () => {
     options,
   };
 
-  await storeInKvCache(params, new Response('body'));
+  await storeKvCacheFromText(params, 'body', 'text/plain');
   // No error thrown, no KV interaction
 });
 
-test('storeInKvCache stores response in KV when kv is defined', async () => {
+test('storeKvCacheFromText stores text content in KV when kv is defined', async () => {
   const mockKv: MockKv = createMockKv();
   mockKv.put.mockResolvedValue(undefined);
   const options: ProxyCacheOptions = createMockOptions({
@@ -283,15 +283,35 @@ test('storeInKvCache stores response in KV when kv is defined', async () => {
     options,
   };
 
-  const response: Response = new Response('stored-body', {
-    headers: { 'content-type': 'text/plain' },
-  });
-
-  await storeInKvCache(params, response);
+  await storeKvCacheFromText(params, 'stored-body', 'text/plain');
 
   expect(mockKv.put).toHaveBeenCalledTimes(1);
   const putArgs: unknown[] = mockKv.put.mock.calls[0] ?? [];
   expect(putArgs[0]).toBe('kv-store-key');
+});
+
+test('storeKvCacheFromText logs KV cache set event when logging enabled', async () => {
+  const consoleSpy: ReturnType<typeof vi.fn> = vi.fn();
+  vi.stubGlobal('console', { log: consoleSpy });
+  const mockKv: MockKv = createMockKv();
+  mockKv.put.mockResolvedValue(undefined);
+  const options: ProxyCacheOptions = createMockOptions({
+    kv: mockKv as unknown as KVNamespace,
+    enableLogging: true,
+  });
+  const params: FetchAndCacheParams = {
+    cacheKey: 'ck',
+    kvCacheKey: 'kv-log-key',
+    target: new URL('https://example.com'),
+    options,
+  };
+
+  await storeKvCacheFromText(params, 'body', 'text/html');
+
+  expect(consoleSpy).toHaveBeenCalledWith('[reverse-proxy]', 'kv-cache-set', {
+    target: 'https://example.com/',
+    cacheKey: 'kv-log-key',
+  });
 });
 
 // --- tryGetKvCache ---

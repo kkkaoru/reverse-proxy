@@ -192,7 +192,7 @@ test('fetchSingleUrl returns cache_hit when KV has cached content', async () => 
   expect(mockFetch).not.toHaveBeenCalled();
 });
 
-// KV cache store path on successful fetch
+// KV cache store path on successful fetch (deferred via fire-and-forget)
 test('fetchSingleUrl stores response in KV cache for cacheable status', async () => {
   const mockKV: MockKV = createMockKV();
   mockKV.get.mockResolvedValue(null);
@@ -209,6 +209,8 @@ test('fetchSingleUrl stores response in KV cache for cacheable status', async ()
   });
   expect(result.result).toStrictEqual('success');
   expect(result.httpStatus).toStrictEqual(200);
+  // Wait for deferred KV write to complete
+  await new Promise((resolve) => setTimeout(resolve, 10));
   expect(mockKV.put).toHaveBeenCalledTimes(1);
 });
 
@@ -228,6 +230,32 @@ test('fetchSingleUrl does not store in KV cache for 500 status', async () => {
   });
   expect(result.result).toStrictEqual('error');
   expect(mockKV.put).not.toHaveBeenCalled();
+});
+
+// KV cache store with waitUntil
+test('fetchSingleUrl uses waitUntil for KV cache store when executionCtx provided', async () => {
+  const mockKV: MockKV = createMockKV();
+  mockKV.get.mockResolvedValue(null);
+  mockKV.put.mockResolvedValue(undefined);
+  const mockWaitUntil: ReturnType<typeof vi.fn> = vi.fn();
+  mockFetch.mockResolvedValueOnce(
+    new Response('<html>deferred</html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    }),
+  );
+  const result: BatchFetchResult = await fetchSingleUrl({
+    url: 'https://example.com/deferred',
+    options: createMockOptions({
+      kv: mockKV as unknown as KVNamespace,
+      executionCtx: {
+        waitUntil: mockWaitUntil,
+        passThroughOnException: vi.fn(),
+      } as unknown as ExecutionContext,
+    }),
+  });
+  expect(result.result).toStrictEqual('success');
+  expect(mockWaitUntil).toHaveBeenCalledTimes(1);
 });
 
 // KV cache store without KV configured
