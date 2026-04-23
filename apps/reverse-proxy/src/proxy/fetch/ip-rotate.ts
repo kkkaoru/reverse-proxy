@@ -4,7 +4,7 @@
 import { isIpRotateTarget } from '../../ip-rotate/client.ts';
 import { fetchWithRetry } from '../../ip-rotate/fetch.ts';
 import { reportOutcomeToDO } from '../../ip-rotate/health-sync.ts';
-import type { FetchRetryResult } from '../../ip-rotate/types.ts';
+import type { EndpointOutcome, FetchRetryResult } from '../../ip-rotate/types.ts';
 import { logEvent } from '../cache.ts';
 import { LOG_EVENT_IP_ROTATE, METHOD_GET } from '../constants.ts';
 import type { IpRotateFetchParams, IpRotateFetchResult, ProxyCacheOptions } from '../types.ts';
@@ -16,27 +16,31 @@ interface PerformIpRotateFetchParams {
   readonly wallClockSignal?: AbortSignal;
 }
 
-// Report outcome to Durable Object via waitUntil
-const reportOutcomeAsync = (params: PerformIpRotateFetchParams, result: FetchRetryResult): void => {
-  if (!(params.options.healthCoordinator && params.options.executionCtx)) return;
-
-  const isSuccess: boolean = result.success;
-  const status: number | undefined = result.success
-    ? result.response.status
-    : result.lastResponse?.status;
-  const isThrottle: boolean = status === 429;
-  const isServerError: boolean = (status ?? 0) >= 500;
-
-  params.options.executionCtx.waitUntil(
-    reportOutcomeToDO({
-      healthCoordinator: params.options.healthCoordinator,
-      domain: params.url.host,
-      index: 0,
-      isSuccess,
-      isThrottle,
-      isServerError,
-    }),
-  );
+// Build an onEndpointOutcome callback that forwards each attempt's result to
+// the Durable Object via waitUntil. Uses the ACTUAL endpoint index (not a
+// hardcoded 0), so per-endpoint failures on 5xx/6xx/429 are remembered across
+// Worker instances. The DO stores a timestamp and the read side enforces a
+// 60-second TTL, so endpoints are only temporarily deprioritized, never
+// permanently excluded.
+const buildOutcomeReporter = (
+  params: PerformIpRotateFetchParams,
+): ((outcome: EndpointOutcome) => void) | undefined => {
+  const coordinator: DurableObjectNamespace | undefined = params.options.healthCoordinator;
+  const executionCtx: ExecutionContext | undefined = params.options.executionCtx;
+  if (!(coordinator && executionCtx)) return undefined;
+  const domain: string = params.url.host;
+  return (outcome: EndpointOutcome): void => {
+    executionCtx.waitUntil(
+      reportOutcomeToDO({
+        healthCoordinator: coordinator,
+        domain,
+        index: outcome.index,
+        isSuccess: outcome.isSuccess,
+        isThrottle: outcome.isThrottle,
+        isServerError: outcome.isServerError,
+      }),
+    );
+  };
 };
 
 // Fetch via IP rotation with retry
@@ -51,6 +55,9 @@ export const fetchViaIpRotate = async (
     method: METHOD_GET,
     wallClockSignal: ipRotateParams.wallClockSignal,
     ...ipRotateParams.tuningEnv,
+    ...(ipRotateParams.onEndpointOutcome && {
+      onEndpointOutcome: ipRotateParams.onEndpointOutcome,
+    }),
   });
 
   if (!result.success) {
@@ -78,6 +85,7 @@ export const performIpRotateFetch = async (
     return null;
   }
 
+  const outcomeReporter = buildOutcomeReporter(params);
   const fetchResult: FetchRetryResult = await fetchWithRetry({
     config: params.options.ipRotateConfig,
     targetUrl: params.url,
@@ -86,10 +94,8 @@ export const performIpRotateFetch = async (
     method: METHOD_GET,
     wallClockSignal: params.wallClockSignal,
     ...params.options.ipRotateTuningEnv,
+    ...(outcomeReporter && { onEndpointOutcome: outcomeReporter }),
   });
-
-  // Report outcome to Durable Object asynchronously
-  reportOutcomeAsync(params, fetchResult);
 
   if (!fetchResult.success) {
     return fetchResult.lastResponse ?? null;

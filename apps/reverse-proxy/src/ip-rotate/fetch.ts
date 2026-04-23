@@ -8,6 +8,7 @@ import {
   HEADER_ACCEPT_ENCODING,
   REDIRECT_MANUAL,
 } from '../proxy/constants.ts';
+import { isAkamaiBlockedResponse } from '../proxy/fetch/akamai.ts';
 import {
   buildRewrittenUrl,
   getEndpointCount,
@@ -22,6 +23,7 @@ import {
 } from './metrics.ts';
 import { signRequest } from './signer.ts';
 import type {
+  EndpointOutcome,
   EndpointWithApiKey,
   FetchRetryErrorCode,
   FetchRetryResult,
@@ -143,7 +145,9 @@ const TIMEOUT_MESSAGE_PATTERN: RegExp = /timeout/i;
 // Retry logic constants
 const STATUS_SERVER_ERROR_START: number = 500;
 const STATUS_TOO_MANY_REQUESTS: number = 429;
+const STATUS_REQUEST_TIMEOUT: number = 408;
 const STATUS_WORKER_RESOURCE_EXHAUSTED: number = 533;
+const STATUS_EXTENDED_ERROR_END: number = 700;
 const MIN_RETRIES: number = 5;
 const ABSOLUTE_MAX_RETRIES: number = 20;
 const ERROR_ALL_ENDPOINTS_FAILED: string = 'All endpoints failed';
@@ -320,11 +324,34 @@ const fetchWithAuth = async (params: FetchWithAuthParams): Promise<Response> => 
 };
 
 // Helper functions for retry logic
-const isRetriableStatus = (status: number): boolean =>
-  (status >= STATUS_SERVER_ERROR_START && status !== STATUS_WORKER_RESOURCE_EXHAUSTED) ||
-  status === STATUS_TOO_MANY_REQUESTS;
+// Retry for 5xx server errors, 6xx non-standard upstream/proxy codes
+// (e.g. 660 emitted by some infrastructure), 429 rate limit, and 408
+// request timeout. 533 (Cloudflare Worker resource exhausted) is NOT
+// retried because rotating IPs cannot fix a local Worker constraint.
+const isRetriableStatus = (status: number): boolean => {
+  if (status === STATUS_WORKER_RESOURCE_EXHAUSTED) return false;
+  if (status >= STATUS_SERVER_ERROR_START && status < STATUS_EXTENDED_ERROR_END) return true;
+  if (status === STATUS_TOO_MANY_REQUESTS) return true;
+  if (status === STATUS_REQUEST_TIMEOUT) return true;
+  return false;
+};
 
-const isServerErrorStatus = (status: number): boolean => status >= STATUS_SERVER_ERROR_START;
+// Emit a per-endpoint outcome callback if the caller supplied one. Used by the
+// proxy layer to forward each attempt's result to the Durable Object so
+// failures on specific endpoints are remembered across Worker instances.
+const emitEndpointOutcome = (params: FetchWithRetryParams, outcome: EndpointOutcome): void => {
+  if (!params.onEndpointOutcome) return;
+  try {
+    params.onEndpointOutcome(outcome);
+  } catch {
+    // Never let outcome reporting break the retry loop
+  }
+};
+
+// Treat 5xx and 6xx (non-standard upstream codes) as server-side errors for
+// retry handler classification.
+const isServerErrorStatus = (status: number): boolean =>
+  status >= STATUS_SERVER_ERROR_START && status < STATUS_EXTENDED_ERROR_END;
 
 const calculateMaxRetries = (endpointCount: number): number =>
   Math.min(Math.max(endpointCount, MIN_RETRIES), ABSOLUTE_MAX_RETRIES);
@@ -626,6 +653,14 @@ const handleServerErrorRetry = (
     index: selected.index,
     isSuccess: false,
   });
+  emitEndpointOutcome(state.params, {
+    index: selected.index,
+    endpoint: result.usedEndpoint,
+    status: result.response?.status,
+    isSuccess: false,
+    isThrottle: false,
+    isServerError: true,
+  });
   // G-2: Extend retry budget
   const extendedMaxRetries: number = Math.min(
     state.maxRetries + EXTRA_RETRIES_PER_BLACKLIST,
@@ -668,6 +703,14 @@ const handleThrottledRetry = async (
     index: selected.index,
     isSuccess: false,
     isThrottle: true,
+  });
+  emitEndpointOutcome(state.params, {
+    index: selected.index,
+    endpoint: result.usedEndpoint,
+    status: result.response?.status,
+    isSuccess: false,
+    isThrottle: true,
+    isServerError: false,
   });
   const throttleDelay: number = calculateThrottleDelay(
     state.consecutiveThrottles,
@@ -809,13 +852,25 @@ const tryHedgedFetch = async (
 };
 
 // Process fetch attempt result through retry handlers
-const processRetryResult = (
+const processRetryResult = async (
   state: RegionAwareRetryState,
   selected: RegionAwareEndpointResult,
   result: FetchAttemptResult,
 ): Promise<FetchRetryResult> => {
   if (result.timedOut) {
     return handleTimeoutRetry(state, selected, result);
+  }
+  // Treat Akamai CDN block (403 or 200 with Access Denied body) as a retriable
+  // endpoint failure so IP rotation picks a different regional egress IP.
+  if (result.response && (await isAkamaiBlockedResponse(result.response))) {
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log('[ip-rotate]', {
+      event: 'akamai-block-detected',
+      attempt: state.attempt,
+      endpoint: result.usedEndpoint,
+      status: result.response.status,
+    });
+    return handleServerErrorRetry(state, selected, result);
   }
   if (result.response && !isRetriableStatus(result.response.status)) {
     // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
@@ -831,7 +886,15 @@ const processRetryResult = (
       index: selected.index,
       isSuccess: true,
     });
-    return Promise.resolve(createSuccessResult(result.response, result.usedEndpoint));
+    emitEndpointOutcome(state.params, {
+      index: selected.index,
+      endpoint: result.usedEndpoint,
+      status: result.response.status,
+      isSuccess: true,
+      isThrottle: false,
+      isServerError: false,
+    });
+    return createSuccessResult(result.response, result.usedEndpoint);
   }
   if (result.response && isServerErrorStatus(result.response.status)) {
     return handleServerErrorRetry(state, selected, result);

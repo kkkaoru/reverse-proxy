@@ -68,6 +68,18 @@ interface FetchWithAuthParams {
   readonly signal?: AbortSignal;
 }
 
+// Per-endpoint outcome emitted during retry loop so the caller can persist
+// failure/throttle signals to the global Durable Object coordinator in real
+// time (not just the final attempt).
+interface EndpointOutcome {
+  readonly index: number;
+  readonly endpoint: string;
+  readonly status: number | undefined;
+  readonly isSuccess: boolean;
+  readonly isThrottle: boolean;
+  readonly isServerError: boolean;
+}
+
 interface FetchWithRetryParams {
   readonly config: IpRotateConfig;
   readonly targetUrl: URL;
@@ -85,6 +97,7 @@ interface FetchWithRetryParams {
   readonly envThrottleBaseDelayMs?: string;
   readonly envThrottleTtlMs?: string;
   readonly envHedgeSuppressThreshold?: string;
+  readonly onEndpointOutcome?: (outcome: EndpointOutcome) => void;
 }
 
 interface FetchWithRetryResult {
@@ -146,6 +159,7 @@ interface SelectRegionAwareEndpointParams {
 }
 
 export type {
+  EndpointOutcome,
   EndpointWithApiKey,
   FetchRetryErrorCode,
   FetchRetryResult,

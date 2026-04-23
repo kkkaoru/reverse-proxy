@@ -105,6 +105,16 @@ export interface IpRotateFetchParams {
   readonly counters: Map<string, number>;
   readonly wallClockSignal?: AbortSignal;
   readonly tuningEnv?: IpRotateTuningEnv;
+  readonly onEndpointOutcome?: (outcome: IpRotateEndpointOutcome) => void;
+}
+
+export interface IpRotateEndpointOutcome {
+  readonly index: number;
+  readonly endpoint: string;
+  readonly status: number | undefined;
+  readonly isSuccess: boolean;
+  readonly isThrottle: boolean;
+  readonly isServerError: boolean;
 }
 
 export interface IpRotateFetchResult {

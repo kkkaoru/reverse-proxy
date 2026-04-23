@@ -189,9 +189,9 @@ test('fetchViaIpRotate passes tuningEnv to fetchWithRetry', async () => {
   expect(callArgs.method).toBe('GET');
 });
 
-// --- reportOutcomeAsync (tested indirectly via performIpRotateFetch) ---
+// --- onEndpointOutcome reporting (tested indirectly via performIpRotateFetch) ---
 
-test('performIpRotateFetch reports success outcome with response status to DO', async () => {
+test('performIpRotateFetch passes onEndpointOutcome to fetchWithRetry that reports success with actual endpoint index to DO', async () => {
   const successResponse: Response = new Response('ok', { status: 200 });
   const successResult: FetchRetryResult = {
     success: true,
@@ -226,29 +226,40 @@ test('performIpRotateFetch reports success outcome with response status to DO', 
     headers: { 'user-agent': 'test' },
   });
 
+  const callArgs: Record<string, unknown> = mockFetchWithRetry.mock.calls[0]?.[0] as Record<
+    string,
+    unknown
+  >;
+  const onOutcome = callArgs.onEndpointOutcome as (outcome: Record<string, unknown>) => void;
+  expect(typeof onOutcome).toBe('function');
+
+  onOutcome({
+    index: 2,
+    endpoint: 'https://ep3.example.com',
+    status: 200,
+    isSuccess: true,
+    isThrottle: false,
+    isServerError: false,
+  });
+
   expect(mockWaitUntil).toHaveBeenCalledTimes(1);
-  expect(mockReportOutcomeToDO).toHaveBeenCalledTimes(1);
   expect(mockReportOutcomeToDO).toHaveBeenCalledWith({
     healthCoordinator: options.healthCoordinator,
     domain: 'target.example.com',
-    index: 0,
+    index: 2,
     isSuccess: true,
     isThrottle: false,
     isServerError: false,
   });
 });
 
-test('performIpRotateFetch reports failure outcome with lastResponse status to DO', async () => {
-  const lastResponse: Response = new Response('throttled', { status: 429 });
-  const failureResult: FetchRetryResult = {
-    success: false,
-    lastResponse,
-    lastUsedEndpoint: 'https://ep1.example.com',
-    error: 'MAX_RETRIES',
-    errorCode: 'MAX_RETRIES',
-    totalAttempts: 3,
+test('performIpRotateFetch reports throttle (429) via onEndpointOutcome with actual endpoint index', async () => {
+  const successResult: FetchRetryResult = {
+    success: true,
+    response: new Response('ok', { status: 200 }),
+    usedEndpoint: 'https://ep1.example.com',
   };
-  mockFetchWithRetry.mockResolvedValueOnce(failureResult);
+  mockFetchWithRetry.mockResolvedValueOnce(successResult);
   mockReportOutcomeToDO.mockResolvedValueOnce(undefined);
 
   const mockWaitUntil: ReturnType<typeof vi.fn> = vi.fn();
@@ -276,28 +287,37 @@ test('performIpRotateFetch reports failure outcome with lastResponse status to D
     headers: { 'user-agent': 'test' },
   });
 
-  expect(mockWaitUntil).toHaveBeenCalledTimes(1);
+  const callArgs: Record<string, unknown> = mockFetchWithRetry.mock.calls[0]?.[0] as Record<
+    string,
+    unknown
+  >;
+  const onOutcome = callArgs.onEndpointOutcome as (outcome: Record<string, unknown>) => void;
+  onOutcome({
+    index: 1,
+    endpoint: 'https://ep2.example.com',
+    status: 429,
+    isSuccess: false,
+    isThrottle: true,
+    isServerError: false,
+  });
+
   expect(mockReportOutcomeToDO).toHaveBeenCalledWith({
     healthCoordinator: options.healthCoordinator,
     domain: 'target.example.com',
-    index: 0,
+    index: 1,
     isSuccess: false,
     isThrottle: true,
     isServerError: false,
   });
 });
 
-test('performIpRotateFetch reports server error status to DO', async () => {
-  const lastResponse: Response = new Response('server error', { status: 500 });
-  const failureResult: FetchRetryResult = {
-    success: false,
-    lastResponse,
-    lastUsedEndpoint: 'https://ep1.example.com',
-    error: 'MAX_RETRIES',
-    errorCode: 'MAX_RETRIES',
-    totalAttempts: 3,
+test('performIpRotateFetch reports 5xx server error via onEndpointOutcome with actual endpoint index', async () => {
+  const successResult: FetchRetryResult = {
+    success: true,
+    response: new Response('ok', { status: 200 }),
+    usedEndpoint: 'https://ep3.example.com',
   };
-  mockFetchWithRetry.mockResolvedValueOnce(failureResult);
+  mockFetchWithRetry.mockResolvedValueOnce(successResult);
   mockReportOutcomeToDO.mockResolvedValueOnce(undefined);
 
   const mockWaitUntil: ReturnType<typeof vi.fn> = vi.fn();
@@ -325,29 +345,38 @@ test('performIpRotateFetch reports server error status to DO', async () => {
     headers: { 'user-agent': 'test' },
   });
 
+  const callArgs: Record<string, unknown> = mockFetchWithRetry.mock.calls[0]?.[0] as Record<
+    string,
+    unknown
+  >;
+  const onOutcome = callArgs.onEndpointOutcome as (outcome: Record<string, unknown>) => void;
+  onOutcome({
+    index: 3,
+    endpoint: 'https://ep4.example.com',
+    status: 652,
+    isSuccess: false,
+    isThrottle: false,
+    isServerError: true,
+  });
+
   expect(mockReportOutcomeToDO).toHaveBeenCalledWith({
     healthCoordinator: options.healthCoordinator,
     domain: 'target.example.com',
-    index: 0,
+    index: 3,
     isSuccess: false,
     isThrottle: false,
     isServerError: true,
   });
 });
 
-test('performIpRotateFetch reports failure with no lastResponse status to DO', async () => {
-  const failureResult: FetchRetryResult = {
-    success: false,
-    lastResponse: null,
-    lastUsedEndpoint: null,
-    error: 'NO_ENDPOINTS',
-    errorCode: 'NO_ENDPOINTS',
-    totalAttempts: 0,
+test('performIpRotateFetch onEndpointOutcome callback is absent when healthCoordinator missing', async () => {
+  const successResult: FetchRetryResult = {
+    success: true,
+    response: new Response('ok', { status: 200 }),
+    usedEndpoint: 'https://ep1.example.com',
   };
-  mockFetchWithRetry.mockResolvedValueOnce(failureResult);
-  mockReportOutcomeToDO.mockResolvedValueOnce(undefined);
+  mockFetchWithRetry.mockResolvedValueOnce(successResult);
 
-  const mockWaitUntil: ReturnType<typeof vi.fn> = vi.fn();
   const options: ProxyCacheOptions = {
     enableLogging: false,
     enableCacheApi: false,
@@ -359,11 +388,6 @@ test('performIpRotateFetch reports failure with no lastResponse status to DO', a
       auth: { type: 'api-key', apiKey: 'key1' },
     },
     ipRotateCounters: new Map<string, number>(),
-    healthCoordinator: {} as DurableObjectNamespace,
-    executionCtx: {
-      waitUntil: mockWaitUntil,
-      passThroughOnException: vi.fn(),
-    } as unknown as ExecutionContext,
   };
 
   await performIpRotateFetch({
@@ -372,14 +396,11 @@ test('performIpRotateFetch reports failure with no lastResponse status to DO', a
     headers: { 'user-agent': 'test' },
   });
 
-  expect(mockReportOutcomeToDO).toHaveBeenCalledWith({
-    healthCoordinator: options.healthCoordinator,
-    domain: 'target.example.com',
-    index: 0,
-    isSuccess: false,
-    isThrottle: false,
-    isServerError: false,
-  });
+  const callArgs: Record<string, unknown> = mockFetchWithRetry.mock.calls[0]?.[0] as Record<
+    string,
+    unknown
+  >;
+  expect(callArgs.onEndpointOutcome).toBeUndefined();
 });
 
 test('performIpRotateFetch skips reportOutcome when healthCoordinator is missing', async () => {
