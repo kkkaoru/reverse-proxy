@@ -13,6 +13,11 @@
     "lint": "bunx biome check src tests vitest.config.ts",
     "lint:fix": "bunx biome check --write src tests vitest.config.ts",
     "deploy": "./scripts/deploy.sh",
-    "upload-endpoints": "./scripts/upload-endpoints-to-kv.sh"
+    "deploy:primary": "./scripts/deploy.sh primary",
+    "deploy:secondary": "./scripts/deploy.sh secondary",
+    "deploy:both": "./scripts/deploy.sh both",
+    "lb:setup": "./scripts/setup-load-balancer.sh",
+    "upload-endpoints": "./scripts/upload-endpoints-to-kv.sh",
+    "purge-akamai-cache": "./scripts/purge-akamai-cache.sh"
   }
 }

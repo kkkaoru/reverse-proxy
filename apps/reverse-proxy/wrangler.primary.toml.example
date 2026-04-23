@@ -1,0 +1,58 @@
+account_id = "${CLOUDFLARE_ACCOUNT_ID}"
+name = "reverse-proxy-queue-a"
+main = "src/index.ts"
+compatibility_date = "2025-10-09"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Dedicated custom domain for worker A. Cloudflare Load Balancer pools this
+# hostname as one of the two origins; the shared ${API_DOMAIN} is owned by the
+# LB DNS record and no longer bound directly to a single Worker.
+routes = [
+  { pattern = "${PRIMARY_WORKER_DOMAIN}", custom_domain = true },
+]
+
+[browser]
+binding = "BROWSER"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "${CLOUDFLARE_KV_NAMESPACE_ID}"
+
+[vars]
+API_DOMAIN = "${API_DOMAIN}"
+ENABLE_CACHE_API = "${ENABLE_CACHE_API}"
+IP_ROTATE_AUTH_TYPE = "${IP_ROTATE_AUTH_TYPE}"
+IP_ROTATE_API_KEY = "${IP_ROTATE_API_KEY}"
+IP_ROTATE_AWS_ACCESS_KEY_ID = "${IP_ROTATE_AWS_ACCESS_KEY_ID}"
+IP_ROTATE_AWS_SECRET_ACCESS_KEY = "${IP_ROTATE_AWS_SECRET_ACCESS_KEY}"
+IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
+IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
+DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
+WORKER_ID = "primary"
+
+# Primary worker owns the EndpointHealthCoordinator Durable Object class.
+# Both workers share the same DO via script_name on the secondary.
+[[durable_objects.bindings]]
+name = "HEALTH_COORDINATOR"
+class_name = "EndpointHealthCoordinator"
+
+# Shared D1 database between both workers (uncomment when a D1 instance exists
+# and set CLOUDFLARE_D1_DATABASE_NAME / CLOUDFLARE_D1_DATABASE_ID in .dev.vars).
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "${CLOUDFLARE_D1_DATABASE_NAME}"
+# database_id = "${CLOUDFLARE_D1_DATABASE_ID}"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["EndpointHealthCoordinator"]
+
+[limits]
+cpu_ms = 300_000
+subrequests = 10_000_000
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true

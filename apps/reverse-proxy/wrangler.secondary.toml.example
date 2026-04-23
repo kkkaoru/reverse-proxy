@@ -1,0 +1,59 @@
+account_id = "${CLOUDFLARE_ACCOUNT_ID}"
+name = "reverse-proxy-queue-b"
+main = "src/index.ts"
+compatibility_date = "2025-10-09"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Dedicated custom domain for worker B. Cloudflare Load Balancer pools this
+# hostname as one of the two origins; the shared ${API_DOMAIN} is owned by the
+# LB DNS record and no longer bound directly to a single Worker.
+routes = [
+  { pattern = "${SECONDARY_WORKER_DOMAIN}", custom_domain = true },
+]
+
+[browser]
+binding = "BROWSER"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "${CLOUDFLARE_KV_NAMESPACE_ID}"
+
+[vars]
+API_DOMAIN = "${API_DOMAIN}"
+ENABLE_CACHE_API = "${ENABLE_CACHE_API}"
+IP_ROTATE_AUTH_TYPE = "${IP_ROTATE_AUTH_TYPE}"
+IP_ROTATE_API_KEY = "${IP_ROTATE_API_KEY}"
+IP_ROTATE_AWS_ACCESS_KEY_ID = "${IP_ROTATE_AWS_ACCESS_KEY_ID}"
+IP_ROTATE_AWS_SECRET_ACCESS_KEY = "${IP_ROTATE_AWS_SECRET_ACCESS_KEY}"
+IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
+IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
+DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
+WORKER_ID = "secondary"
+
+# Secondary worker binds to the PRIMARY worker's Durable Object class.
+# `script_name` forces this binding to reference the DO namespace owned by
+# `reverse-proxy-queue-a`, so both workers share health state in the same
+# logical DO instance.
+[[durable_objects.bindings]]
+name = "HEALTH_COORDINATOR"
+class_name = "EndpointHealthCoordinator"
+script_name = "reverse-proxy-queue-a"
+
+# Shared D1 database (must match primary's database_id so both workers see the
+# same rows). Uncomment once CLOUDFLARE_D1_DATABASE_ID is set in .dev.vars.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "${CLOUDFLARE_D1_DATABASE_NAME}"
+# database_id = "${CLOUDFLARE_D1_DATABASE_ID}"
+
+# Secondary does NOT declare the migration - the primary owns the DO class.
+
+[limits]
+cpu_ms = 300_000
+subrequests = 10_000_000
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true

@@ -7,6 +7,21 @@ CLOUDFLARE_ACCOUNT_ID="<account-id>"
 # KV namespace ID for caching.
 CLOUDFLARE_KV_NAMESPACE_ID="<kv-namespace-id>"
 
+# Shared D1 database, used by both primary and secondary workers.
+CLOUDFLARE_D1_DATABASE_NAME="<d1-database-name>"
+CLOUDFLARE_D1_DATABASE_ID="<d1-database-id>"
+
+# Custom domains:
+#   API_DOMAIN                  -> original shared domain, now fronted by LB.
+#   PRIMARY_WORKER_DOMAIN       -> dedicated subdomain for worker A (LB pool origin).
+#   SECONDARY_WORKER_DOMAIN     -> dedicated subdomain for worker B (LB pool origin).
+PRIMARY_WORKER_DOMAIN="reverse-proxy-a.api.kkk4oru.com"
+SECONDARY_WORKER_DOMAIN="reverse-proxy-b.api.kkk4oru.com"
+
+# Cloudflare Load Balancer configuration (used by scripts/setup-load-balancer.sh)
+CLOUDFLARE_ZONE_ID="<zone-id>"
+CLOUDFLARE_API_TOKEN_LB="<api-token-with-Load-Balancing-edit-and-Zone-DNS-edit>"
+
 # Custom domain (subdomain of kkk4oru.com) used to serve the Worker.
 API_DOMAIN="<api-domain.example.com>"
 
