@@ -24,8 +24,15 @@ const createHealthcheckLogDetail = (): HealthcheckLogDetail => ({
   path: HEALTHCHECK_PATH,
 });
 
-export const handleHealthcheck = (c: Context): Response => {
+interface HealthcheckEnv {
+  readonly WORKER_ID?: string;
+}
+
+export const handleHealthcheck = (c: Context<{ Bindings: HealthcheckEnv }>): Response => {
   // biome-ignore lint/suspicious/noConsole: healthcheck visibility required.
   console.log(LOG_PREFIX, LOG_EVENT_HEALTHCHECK, createHealthcheckLogDetail());
-  return c.text(HEALTHCHECK_BODY, HEALTH_STATUS_OK);
+  const workerId: string = c.env?.WORKER_ID ?? 'unknown';
+  return c.text(HEALTHCHECK_BODY, HEALTH_STATUS_OK, {
+    'X-Worker-Id': workerId,
+  });
 };
