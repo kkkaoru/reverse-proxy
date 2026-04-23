@@ -8,11 +8,12 @@ import {
   WALL_CLOCK_TIMEOUT_MS,
 } from '../constants.ts';
 import type { FetchAndCacheParams, ProxyCacheOptions } from '../types.ts';
+import { isAkamaiBlockedResponse } from './akamai.ts';
 import { buildFetchHeaders } from './headers.ts';
 import { performIpRotateFetch, shouldUseIpRotate } from './ip-rotate.ts';
 import { createTooManyRedirectsResponse, handleRedirect } from './redirect.ts';
 import { processFetchResponse } from './response.ts';
-import { isRedirectStatus } from './status.ts';
+import { isRedirectStatus, isTransientUpstreamFailureStatus } from './status.ts';
 
 // Recursive fetch state interface
 interface FetchState {
@@ -41,12 +42,69 @@ export const performStandardFetch = (
     signal,
   });
 
-// Perform fetch with IP rotation support
+// Decide whether a response should trigger the IP rotate fallback path.
+// Returns a label describing the failure reason, or null if the response is
+// considered acceptable and should be returned to the caller.
+const classifyFallbackReason = async (
+  response: Response,
+): Promise<'akamai-block' | 'transient-upstream-failure' | null> => {
+  if (await isAkamaiBlockedResponse(response)) return 'akamai-block';
+  if (isTransientUpstreamFailureStatus(response.status)) {
+    return 'transient-upstream-failure';
+  }
+  return null;
+};
+
+// Try falling back to IP rotate (AWS API Gateway regional egress). Returns
+// null if fallback is not configured or itself returned an unrecoverable
+// response (Akamai block or transient upstream failure).
+const tryIpRotateFallback = async (
+  params: PerformFetchParams,
+  url: URL,
+): Promise<Response | null> => {
+  if (!params.options.ipRotateConfig) return null;
+  const ipRotateResponse: Response | null = await performIpRotateFetch({
+    options: params.options,
+    url,
+    headers: params.headers,
+    wallClockSignal: params.wallClockSignal,
+  });
+  if (!ipRotateResponse) return null;
+  if ((await classifyFallbackReason(ipRotateResponse)) !== null) return null;
+  // biome-ignore lint/suspicious/noConsole: observability for fallback behavior
+  console.log('[proxy]', {
+    event: 'ip-rotate-recovered',
+    target: url.toString(),
+    status: ipRotateResponse.status,
+  });
+  return ipRotateResponse;
+};
+
+// Perform fetch with IP rotation support. If the primary path returns an
+// Akamai block (403 or 200 with Access Denied HTML body) OR a transient
+// upstream failure (5xx including 660, 429, 408), retry via IP rotate
+// endpoints which present different egress IPs per region.
 export const performFetch = async (params: PerformFetchParams): Promise<Response> => {
   const url: URL = new URL(params.currentUrl);
 
   if (!shouldUseIpRotate(params.options, url)) {
-    return performStandardFetch(params.currentUrl, params.headers, params.wallClockSignal);
+    const standardResponse: Response = await performStandardFetch(
+      params.currentUrl,
+      params.headers,
+      params.wallClockSignal,
+    );
+    const reason: 'akamai-block' | 'transient-upstream-failure' | null =
+      await classifyFallbackReason(standardResponse);
+    if (reason === null) return standardResponse;
+    // biome-ignore lint/suspicious/noConsole: observability for fallback trigger
+    console.log('[proxy]', {
+      event: 'standard-fetch-fallback',
+      reason,
+      target: url.toString(),
+      status: standardResponse.status,
+    });
+    const recovered: Response | null = await tryIpRotateFallback(params, url);
+    return recovered ?? standardResponse;
   }
 
   const ipRotateResponse: Response | null = await performIpRotateFetch({
@@ -55,10 +113,11 @@ export const performFetch = async (params: PerformFetchParams): Promise<Response
     headers: params.headers,
     wallClockSignal: params.wallClockSignal,
   });
-  return (
-    ipRotateResponse ??
-    performStandardFetch(params.currentUrl, params.headers, params.wallClockSignal)
-  );
+  if (ipRotateResponse !== null && (await classifyFallbackReason(ipRotateResponse)) === null) {
+    return ipRotateResponse;
+  }
+  // IP rotate failed or returned block/transient failure - last resort: standard fetch
+  return performStandardFetch(params.currentUrl, params.headers, params.wallClockSignal);
 };
 
 // Process single fetch iteration - returns response or next state for recursion

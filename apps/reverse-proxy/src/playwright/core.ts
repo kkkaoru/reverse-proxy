@@ -9,6 +9,7 @@ import {
 } from '../ip-rotate/client.ts';
 import { fetchWithRetry } from '../ip-rotate/fetch.ts';
 import type { FetchRetryResult, IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
+import { isAkamaiBlockBody } from '../proxy/fetch/akamai.ts';
 
 // Interfaces
 export interface PlaywrightCoreEnv {
@@ -341,8 +342,21 @@ export const handleFetchError = (
   return createErrorResponse(`Browser fetch failed: ${errorMessage}`, STATUS_BAD_GATEWAY);
 };
 
+interface ShouldCacheParams {
+  readonly env: PlaywrightCoreEnv;
+  readonly status: number;
+  readonly disableKv: boolean;
+  readonly content: string;
+}
+
 export const shouldCache = (env: PlaywrightCoreEnv, status: number, disableKv: boolean): boolean =>
   !disableKv && env.KV !== undefined && isCacheableStatus(status);
+
+// Extended check that also rejects Akamai-blocked content from being cached.
+export const shouldCacheContent = (params: ShouldCacheParams): boolean => {
+  if (!shouldCache(params.env, params.status, params.disableKv)) return false;
+  return !isAkamaiBlockBody(params.content);
+};
 
 export const shouldLogCacheSkip = (env: PlaywrightCoreEnv, status: number): boolean =>
   env.KV !== undefined && !isCacheableStatus(status);
@@ -350,7 +364,12 @@ export const shouldLogCacheSkip = (env: PlaywrightCoreEnv, status: number): bool
 export const handleFetchSuccess = async (params: HandleFetchSuccessParams): Promise<Response> => {
   const { env, targetUrl, cacheKey, content, contentType, status, disableKv } = params;
 
-  if (shouldCache(env, status, disableKv) && env.KV) {
+  const akamaiBlocked: boolean = isAkamaiBlockBody(content);
+  if (akamaiBlocked) {
+    logEvent(env, 'akamai-block-not-cached', { target: targetUrl, status });
+  }
+
+  if (shouldCacheContent({ env, status, disableKv, content }) && env.KV) {
     await setCachedContent({ kv: env.KV, cacheKey, data: { content, contentType } });
     logEvent(env, 'cache-set', { target: targetUrl, cacheKey });
   }
