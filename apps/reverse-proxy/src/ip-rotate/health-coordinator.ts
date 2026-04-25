@@ -8,6 +8,7 @@ import { updateHealthScore } from './metrics.ts';
 // Interfaces at top
 interface OutcomeReport {
   readonly domain: string;
+  readonly urlHash: string;
   readonly index: number;
   readonly isSuccess: boolean;
   readonly isThrottle: boolean;
@@ -43,11 +44,15 @@ const isHealthKey = (key: string): boolean =>
   key.startsWith(`${EWMA_KEY_PREFIX}:`) ||
   key.startsWith(`${EWMA_TS_KEY_PREFIX}:`);
 
-// Parse key to check domain and index validity
+// Parse key to check domain and index validity.
+// Supports both the legacy 3-part format `prefix:domain:index` and the newer
+// 4-part `prefix:domain:urlHash:index` used by 5xx/6xx blacklists scoped
+// per (URL, endpoint). The index is always the last segment.
 const isKeyForDomain = (key: string, domain: string, endpointCount: number): boolean => {
   const parts: string[] = key.split(':');
   if (parts.length < 3 || parts[1] !== domain) return false;
-  const index: number = Number.parseInt(parts[2] ?? '', 10);
+  const indexStr: string = parts[parts.length - 1] ?? '';
+  const index: number = Number.parseInt(indexStr, 10);
   return !Number.isNaN(index) && index >= 0 && index < endpointCount;
 };
 
@@ -164,9 +169,15 @@ export default class EndpointHealthCoordinator extends DurableObject {
       isSuccess: report.isSuccess,
       isThrottle: report.isThrottle,
     });
-    // Record failure/throttle timestamps
+    // Record failure/throttle timestamps. Server-error keys are scoped to
+    // (domain, urlHash, index) so a 5xx/6xx on one URL does not blacklist
+    // the endpoint for every other URL. Throttle keys stay domain-wide
+    // because upstream rate limits apply to all URLs.
     if (report.isServerError) {
-      this.state.set(`${FAILURE_KEY_PREFIX}:${report.domain}:${report.index}`, Date.now());
+      this.state.set(
+        `${FAILURE_KEY_PREFIX}:${report.domain}:${report.urlHash}:${report.index}`,
+        Date.now(),
+      );
     }
     if (report.isThrottle) {
       this.state.set(`${THROTTLE_KEY_PREFIX}:${report.domain}:${report.index}`, Date.now());

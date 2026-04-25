@@ -40,12 +40,14 @@ import type {
 interface RecordEndpointFailureParams {
   readonly counters: Map<string, number>;
   readonly domain: string;
+  readonly urlHash: string;
   readonly index: number;
 }
 
 interface GetRecentlyFailedParams {
   readonly counters: Map<string, number>;
   readonly domain: string;
+  readonly urlHash: string;
   readonly endpointCount: number;
   readonly healthTtlMs?: number;
 }
@@ -88,6 +90,7 @@ interface RegionAwareRetryState {
   readonly consecutiveThrottles: number;
   readonly hedgeAttemptsUsed: number;
   readonly tuning: ResolvedTuning;
+  readonly urlHash: string;
 }
 
 interface FetchAttemptResult {
@@ -389,11 +392,32 @@ const createAuthFromEndpoint = (baseAuth: IpRotateAuth, endpointApiKey: string):
 };
 
 // G-1: Health tracking functions
-const buildHealthKey = (domain: string, index: number): string =>
-  `${HEALTH_KEY_PREFIX}:${domain}:${index}`;
+// Keys are scoped per (domain, urlHash, endpoint index) so a 5xx/6xx failure
+// on endpoint #N for URL X only prevents endpoint #N from being picked again
+// for URL X within the TTL window; other URLs can still use endpoint #N and
+// the pool of available endpoints per-URL grows compared to a blanket
+// domain-level blacklist.
+const buildHealthKey = (domain: string, urlHash: string, index: number): string =>
+  `${HEALTH_KEY_PREFIX}:${domain}:${urlHash}:${index}`;
+
+// FNV-1a 32-bit string hash. Used to derive a compact per-URL suffix for the
+// (domain, urlHash, index) blacklist key so the DO/KV does not grow with full
+// URL strings. Same URL -> same hash, so subsequent requests see prior
+// failures.
+const URL_HASH_BASIS: number = 0x811c9dc5;
+const URL_HASH_PRIME: number = 0x01000193;
+const URL_HASH_HEX_WIDTH: number = 8;
+
+const hashUrl = (value: string): string => {
+  const hash: number = Array.from(value).reduce((acc: number, ch: string): number => {
+    const xored: number = acc ^ ch.charCodeAt(0);
+    return Math.imul(xored, URL_HASH_PRIME) >>> 0;
+  }, URL_HASH_BASIS);
+  return hash.toString(16).padStart(URL_HASH_HEX_WIDTH, '0');
+};
 
 const recordEndpointFailure = (params: RecordEndpointFailureParams): void => {
-  params.counters.set(buildHealthKey(params.domain, params.index), Date.now());
+  params.counters.set(buildHealthKey(params.domain, params.urlHash, params.index), Date.now());
 };
 
 const getRecentlyFailedIndices = (params: GetRecentlyFailedParams): Set<number> => {
@@ -403,7 +427,7 @@ const getRecentlyFailedIndices = (params: GetRecentlyFailedParams): Set<number> 
     Array.from({ length: params.endpointCount }, (_: unknown, i: number) => i).filter(
       (i: number) => {
         const lastFailure: number | undefined = params.counters.get(
-          buildHealthKey(params.domain, i),
+          buildHealthKey(params.domain, params.urlHash, i),
         );
         return lastFailure !== undefined && now - lastFailure < ttl;
       },
@@ -610,6 +634,7 @@ const handleTimeoutRetry = (
   recordEndpointFailure({
     counters: state.params.counters,
     domain: state.params.targetUrl.host,
+    urlHash: state.urlHash,
     index: selected.index,
   });
   updateHealthScore({
@@ -641,10 +666,12 @@ const handleServerErrorRetry = (
     status: result.response?.status,
   });
   state.serverErrorEndpoints.add(selected.index);
-  // G-1: Record failure for cross-request deprioritization
+  // G-1: Record failure scoped to (domain, urlHash, index) so the same URL
+  // will avoid this endpoint next time, while other URLs can still use it.
   recordEndpointFailure({
     counters: state.params.counters,
     domain: state.params.targetUrl.host,
+    urlHash: state.urlHash,
     index: selected.index,
   });
   updateHealthScore({
@@ -657,6 +684,7 @@ const handleServerErrorRetry = (
     index: selected.index,
     endpoint: result.usedEndpoint,
     status: result.response?.status,
+    urlHash: state.urlHash,
     isSuccess: false,
     isThrottle: false,
     isServerError: true,
@@ -708,6 +736,7 @@ const handleThrottledRetry = async (
     index: selected.index,
     endpoint: result.usedEndpoint,
     status: result.response?.status,
+    urlHash: state.urlHash,
     isSuccess: false,
     isThrottle: true,
     isServerError: false,
@@ -734,10 +763,36 @@ const handleThrottledRetry = async (
   });
 };
 
+// Dynamic hedge policy: scale the hedge budget with retry attempts.
+//   attempt 0-1 : allow at most 1 hedge (classic single hedged fallback).
+//   attempt >= 2: allow up to the configured maximum.
+// We NEVER exceed configuredMax so "scatter-mode" (N parallel requests from
+// the first attempt) stays forbidden.
+const HEDGE_ATTEMPT_FULL_BUDGET_THRESHOLD: number = 2;
+const HEDGE_ATTEMPT_INITIAL_CAP: number = 1;
+const HEDGE_DELAY_MIN_MS: number = 200;
+const HEDGE_DELAY_STEP_MS: number = 50;
+
+const computeDynamicHedgeCap = (attempt: number, configuredMax: number): number => {
+  if (configuredMax <= 0) return 0;
+  if (attempt < HEDGE_ATTEMPT_FULL_BUDGET_THRESHOLD) {
+    return Math.min(HEDGE_ATTEMPT_INITIAL_CAP, configuredMax);
+  }
+  return configuredMax;
+};
+
+// Shrink hedge delay as retries accumulate so later attempts hedge sooner
+// when the primary is still slow.
+const computeDynamicHedgeDelayMs = (attempt: number, configuredDelayMs: number): number => {
+  const reduced: number = configuredDelayMs - attempt * HEDGE_DELAY_STEP_MS;
+  return Math.max(HEDGE_DELAY_MIN_MS, reduced);
+};
+
 // Hedge eligibility check
 const isHedgeEligible = (state: RegionAwareRetryState): boolean => {
+  const dynamicCap: number = computeDynamicHedgeCap(state.attempt, state.tuning.maxHedgeAttempts);
   if (
-    state.hedgeAttemptsUsed >= state.tuning.maxHedgeAttempts ||
+    state.hedgeAttemptsUsed >= dynamicCap ||
     state.attempt + HEDGE_ATTEMPT_COST > state.maxRetries
   ) {
     return false;
@@ -826,13 +881,17 @@ const tryHedgedFetch = async (
     primarySelected,
     primaryAbort.signal,
   );
-  // Phase 1: Race primary completion vs adaptive hedge delay timer
-  const hedgeDelay: number = getAdaptiveHedgeDelay({
+  // Phase 1: Race primary completion vs adaptive hedge delay timer.
+  // Start with the metrics-driven adaptive delay, then shrink it further as
+  // the retry attempt count grows so later retries hedge sooner without
+  // firing parallel requests on the very first try.
+  const adaptiveDelay: number = getAdaptiveHedgeDelay({
     counters: state.params.counters,
     domain: state.params.targetUrl.host,
     endpointCount: state.endpoints.length,
     defaultDelayMs: state.tuning.hedgeDelayMs,
   });
+  const hedgeDelay: number = computeDynamicHedgeDelayMs(state.attempt, adaptiveDelay);
   const earlyResult: FetchAttemptResult | null = await Promise.race([
     primaryPromise.then((r: FetchAttemptResult): FetchAttemptResult => r),
     waitMs(hedgeDelay).then((): null => null),
@@ -890,6 +949,7 @@ const processRetryResult = async (
       index: selected.index,
       endpoint: result.usedEndpoint,
       status: result.response.status,
+      urlHash: state.urlHash,
       isSuccess: true,
       isThrottle: false,
       isServerError: false,
@@ -967,11 +1027,15 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
     params.timeoutMs ?? getDefaultTimeoutFromEnv(params.envDefaultTimeoutMs);
   const timeoutConfig: TimeoutConfig = defaultTimeoutConfig;
   const tuning: ResolvedTuning = resolveTuning(params);
+  const urlHash: string = hashUrl(params.targetUrl.toString());
 
-  // G-1: Pre-populate triedEndpointIndices with recently failed endpoints
+  // Pre-populate triedEndpointIndices with endpoints that recently returned
+  // 5xx/6xx FOR THIS URL. Endpoints that failed only for other URLs remain
+  // available here, expanding the usable pool per-URL.
   const recentlyFailed: Set<number> = getRecentlyFailedIndices({
     counters: params.counters,
     domain: params.targetUrl.host,
+    urlHash,
     endpointCount: endpoints.length,
     healthTtlMs: tuning.healthTtlMs,
   });
@@ -992,6 +1056,7 @@ const fetchWithRetry = (params: FetchWithRetryParams): Promise<FetchRetryResult>
     consecutiveThrottles: 0,
     hedgeAttemptsUsed: 0,
     tuning,
+    urlHash,
   });
 };
 
@@ -1003,9 +1068,12 @@ export {
   calculateMaxRetries,
   calculateThrottleDelay,
   clampTimeout,
+  computeDynamicHedgeCap,
+  computeDynamicHedgeDelayMs,
   DEFAULT_HEDGE_DELAY_MS,
   DEFAULT_TIMEOUT_MS,
   drainResponseBody,
+  hashUrl,
   defaultTimeoutConfig,
   ENV_DEFAULT_TIMEOUT,
   ERROR_ALL_ENDPOINTS_FAILED,

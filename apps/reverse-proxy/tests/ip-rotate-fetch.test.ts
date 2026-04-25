@@ -9,6 +9,7 @@ import {
   fetchWithAuth,
   fetchWithRetry,
   getDefaultTimeoutFromEnv,
+  hashUrl,
   isRetriableError,
   isRetriableStatus,
   isServerErrorStatus,
@@ -580,8 +581,9 @@ describe('ip-rotate-fetch blacklisting and health tracking', () => {
   test('fetchWithRetry deprioritizes recently failed endpoints across requests (G-1)', async () => {
     const capturedUrls: string[] = [];
     const counters: Map<string, number> = new Map();
-    // Simulate prior request that recorded api1 as failed
-    counters.set('5xx:example.com:0', Date.now());
+    // Simulate prior request that recorded api1 as failed FOR THIS URL
+    const targetHash: string = hashUrl('https://example.com/path');
+    counters.set(`5xx:example.com:${targetHash}:0`, Date.now());
 
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       capturedUrls.push(url);
@@ -690,8 +692,9 @@ describe('ip-rotate-fetch blacklisting and health tracking', () => {
     const result = await fetchWithRetry(params);
 
     expect(result.success).toBe(true);
-    // Timeout should have been recorded for deprioritization
-    expect(counters.has('5xx:example.com:0')).toBe(true);
+    // Timeout should have been recorded for deprioritization (URL-scoped)
+    const timeoutKeyHash: string = hashUrl('https://example.com/path');
+    expect(counters.has(`5xx:example.com:${timeoutKeyHash}:0`)).toBe(true);
   });
 });
 

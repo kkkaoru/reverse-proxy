@@ -26,6 +26,7 @@ import {
   HEALTH_TTL_MS,
   HEDGE_ATTEMPT_COST,
   HEDGE_SUPPRESS_THRESHOLD,
+  hashUrl,
   isRetriableStatus,
   isServerErrorStatus,
   isTimeoutError,
@@ -869,18 +870,18 @@ test('fetchWithRetry blacklists 5xx endpoints and does not retry them', async ()
 });
 
 // G-1: Cross-request health tracking
-test('buildHealthKey builds correct key', () => {
-  expect(buildHealthKey('example.com', 0)).toBe('5xx:example.com:0');
-  expect(buildHealthKey('example.com', 2)).toBe('5xx:example.com:2');
+test('buildHealthKey builds correct key with urlHash', () => {
+  expect(buildHealthKey('example.com', 'deadbeef', 0)).toBe('5xx:example.com:deadbeef:0');
+  expect(buildHealthKey('example.com', 'cafebabe', 2)).toBe('5xx:example.com:cafebabe:2');
 });
 
 test('recordEndpointFailure records timestamp to counters', () => {
   const counters: Map<string, number> = new Map();
   const before: number = Date.now();
-  recordEndpointFailure({ counters, domain: 'example.com', index: 1 });
+  recordEndpointFailure({ counters, domain: 'example.com', urlHash: 'hash1', index: 1 });
   const after: number = Date.now();
 
-  const recorded: number | undefined = counters.get('5xx:example.com:1');
+  const recorded: number | undefined = counters.get('5xx:example.com:hash1:1');
   expect(recorded).toBeDefined();
   expect(recorded).toBeGreaterThanOrEqual(before);
   expect(recorded).toBeLessThanOrEqual(after);
@@ -888,12 +889,13 @@ test('recordEndpointFailure records timestamp to counters', () => {
 
 test('getRecentlyFailedIndices returns recent failures', () => {
   const counters: Map<string, number> = new Map();
-  counters.set('5xx:example.com:0', Date.now());
-  counters.set('5xx:example.com:2', Date.now());
+  counters.set('5xx:example.com:hash1:0', Date.now());
+  counters.set('5xx:example.com:hash1:2', Date.now());
 
   const result: Set<number> = getRecentlyFailedIndices({
     counters,
     domain: 'example.com',
+    urlHash: 'hash1',
     endpointCount: 3,
   });
 
@@ -905,11 +907,12 @@ test('getRecentlyFailedIndices returns recent failures', () => {
 test('getRecentlyFailedIndices excludes expired failures', () => {
   const counters: Map<string, number> = new Map();
   // Set failure time to be older than TTL
-  counters.set('5xx:example.com:0', Date.now() - 120000);
+  counters.set('5xx:example.com:hash1:0', Date.now() - 120000);
 
   const result: Set<number> = getRecentlyFailedIndices({
     counters,
     domain: 'example.com',
+    urlHash: 'hash1',
     endpointCount: 2,
   });
 
@@ -917,11 +920,34 @@ test('getRecentlyFailedIndices excludes expired failures', () => {
   expect(result.has(1)).toBe(false);
 });
 
+test('getRecentlyFailedIndices isolates failures across different urlHashes', () => {
+  const counters: Map<string, number> = new Map();
+  counters.set('5xx:example.com:urlA:0', Date.now());
+
+  const hitForA: Set<number> = getRecentlyFailedIndices({
+    counters,
+    domain: 'example.com',
+    urlHash: 'urlA',
+    endpointCount: 2,
+  });
+  const hitForB: Set<number> = getRecentlyFailedIndices({
+    counters,
+    domain: 'example.com',
+    urlHash: 'urlB',
+    endpointCount: 2,
+  });
+
+  expect(hitForA.has(0)).toBe(true);
+  expect(hitForB.has(0)).toBe(false);
+});
+
 test('fetchWithRetry deprioritizes recently failed endpoints (G-1)', async () => {
   const capturedUrls: string[] = [];
   const counters: Map<string, number> = new Map();
-  // Mark endpoint 0 as recently failed
-  counters.set('5xx:example.com:0', Date.now());
+  // Mark endpoint 0 as recently failed FOR THIS URL
+  const targetUrlString: string = 'https://example.com/path';
+  const targetHash: string = hashUrl(targetUrlString);
+  counters.set(`5xx:example.com:${targetHash}:0`, Date.now());
 
   globalThis.fetch = vi.fn().mockImplementation((url: string) => {
     capturedUrls.push(url);
@@ -1018,8 +1044,9 @@ test('fetchWithRetry records timeout to counters for deprioritization (G-4)', as
   });
 
   expect(result.success).toBe(true);
-  // Timeout should have recorded endpoint 0 failure in counters
-  expect(counters.has('5xx:example.com:0')).toBe(true);
+  // Timeout should have recorded endpoint 0 failure in counters (URL-scoped)
+  const timeoutKeyHash: string = hashUrl('https://example.com/path');
+  expect(counters.has(`5xx:example.com:${timeoutKeyHash}:0`)).toBe(true);
 });
 
 // G-4: Timeout does not blacklist (only soft deprioritization)

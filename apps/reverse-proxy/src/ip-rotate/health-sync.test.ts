@@ -269,6 +269,7 @@ test('reportOutcomeToDO returns early when no healthCoordinator', async () => {
   const params: ReportOutcomeParams = {
     healthCoordinator: undefined,
     domain: 'example.com',
+    urlHash: 'deadbeef',
     index: 0,
     isSuccess: true,
     isThrottle: false,
@@ -286,6 +287,7 @@ test('reportOutcomeToDO calls stub.reportOutcome', async () => {
   const params: ReportOutcomeParams = {
     healthCoordinator: namespace as unknown as DurableObjectNamespace,
     domain: 'example.com',
+    urlHash: 'cafebabe',
     index: 1,
     isSuccess: false,
     isThrottle: true,
@@ -296,6 +298,7 @@ test('reportOutcomeToDO calls stub.reportOutcome', async () => {
 
   expect(mockReportOutcome).toHaveBeenCalledWith({
     domain: 'example.com',
+    urlHash: 'cafebabe',
     index: 1,
     isSuccess: false,
     isThrottle: true,
@@ -310,6 +313,7 @@ test('reportOutcomeToDO handles RPC error gracefully', async () => {
   const params: ReportOutcomeParams = {
     healthCoordinator: namespace as unknown as DurableObjectNamespace,
     domain: 'example.com',
+    urlHash: 'deadbeef',
     index: 0,
     isSuccess: true,
     isThrottle: false,
@@ -327,6 +331,7 @@ test('reportOutcomeToDO uses default instance name', async () => {
   const params: ReportOutcomeParams = {
     healthCoordinator: namespace as unknown as DurableObjectNamespace,
     domain: 'example.com',
+    urlHash: 'deadbeef',
     index: 0,
     isSuccess: true,
     isThrottle: false,

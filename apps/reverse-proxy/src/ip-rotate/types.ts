@@ -75,6 +75,7 @@ interface EndpointOutcome {
   readonly index: number;
   readonly endpoint: string;
   readonly status: number | undefined;
+  readonly urlHash: string;
   readonly isSuccess: boolean;
   readonly isThrottle: boolean;
   readonly isServerError: boolean;

@@ -15,6 +15,7 @@ interface SyncHealthParams {
 interface ReportOutcomeParams {
   readonly healthCoordinator: DurableObjectNamespace | undefined;
   readonly domain: string;
+  readonly urlHash: string;
   readonly index: number;
   readonly isSuccess: boolean;
   readonly isThrottle: boolean;
@@ -173,6 +174,7 @@ const reportOutcomeToDO = async (params: ReportOutcomeParams): Promise<void> => 
     const stub: DoStubWithRpc = getDoStub(params.healthCoordinator);
     const report: OutcomeReport = {
       domain: params.domain,
+      urlHash: params.urlHash,
       index: params.index,
       isSuccess: params.isSuccess,
       isThrottle: params.isThrottle,

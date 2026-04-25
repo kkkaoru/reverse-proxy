@@ -34,6 +34,7 @@ const buildOutcomeReporter = (
       reportOutcomeToDO({
         healthCoordinator: coordinator,
         domain,
+        urlHash: outcome.urlHash,
         index: outcome.index,
         isSuccess: outcome.isSuccess,
         isThrottle: outcome.isThrottle,
