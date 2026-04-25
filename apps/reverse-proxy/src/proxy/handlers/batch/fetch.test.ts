@@ -122,11 +122,16 @@ test('fetchSingleUrl returns success for 302 redirect', async () => {
 
 // fetchSingleUrl error tests
 test('fetchSingleUrl returns error for 500 response', async () => {
-  mockFetch.mockResolvedValueOnce(
-    new Response('server error', {
-      status: 500,
-      headers: { 'content-type': 'text/plain' },
-    }),
+  // performFetch now retries transient 5xx up to PROXY_RETRY_MAX_ATTEMPTS
+  // internally. Use mockImplementation to produce a fresh Response (fresh
+  // body stream) per call so retries don't reuse an already-read body.
+  mockFetch.mockImplementation(() =>
+    Promise.resolve(
+      new Response('server error', {
+        status: 500,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    ),
   );
   const result: BatchFetchResult = await fetchSingleUrl({
     url: 'https://example.com',

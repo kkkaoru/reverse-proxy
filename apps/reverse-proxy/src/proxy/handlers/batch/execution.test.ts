@@ -167,15 +167,20 @@ test('executeBatchFetch retries failed requests once', async () => {
 });
 
 test('executeBatchFetch does not retry already retried requests', async () => {
-  mockFetch.mockResolvedValueOnce(new Response('fail', { status: 500 }));
-  mockFetch.mockResolvedValueOnce(new Response('fail-again', { status: 500 }));
+  // performFetch retries transient 5xx up to PROXY_RETRY_MAX_ATTEMPTS (2)
+  // per invocation. The batch handler itself schedules ONE extra retry for
+  // a failed task. So a single failing URL produces 2 * 2 = 4 fetches, and
+  // then the retried task is NOT retried a second time.
+  mockFetch.mockImplementation(() => Promise.resolve(new Response('fail', { status: 500 })));
   const results: readonly BatchFetchResult[] = await executeBatchFetch({
     urls: ['https://a.com'],
     options: createMockOptions(),
   });
   const first: BatchFetchResult | undefined = results[0];
   expect(first?.result).toStrictEqual('error');
-  expect(mockFetch).toHaveBeenCalledTimes(2);
+  const PROXY_RETRY_ATTEMPTS: number = 2;
+  const BATCH_RETRY_ATTEMPTS: number = 2;
+  expect(mockFetch).toHaveBeenCalledTimes(PROXY_RETRY_ATTEMPTS * BATCH_RETRY_ATTEMPTS);
 });
 
 test('executeBatchFetch handles empty URLs array', async () => {

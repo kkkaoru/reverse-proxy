@@ -41,7 +41,11 @@ describe('reverse proxy cache behavior', () => {
     const secondAttempt: Response = await app.request(encodedTarget, {}, DEFAULT_ENV);
     expect(secondAttempt.status).toBe(502);
     expect(await secondAttempt.text()).toBe('fail');
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // performFetch retries transient 5xx up to PROXY_RETRY_MAX_ATTEMPTS per
+    // client request. Two client requests x 2 retries = 4 upstream fetches.
+    const PROXY_RETRY_ATTEMPTS: number = 2;
+    const CLIENT_REQUESTS: number = 2;
+    expect(fetchSpy).toHaveBeenCalledTimes(PROXY_RETRY_ATTEMPTS * CLIENT_REQUESTS);
   });
 });
 

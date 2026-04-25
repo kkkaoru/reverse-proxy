@@ -239,11 +239,16 @@ test('fetchSingleUrl returns success for valid URL', async () => {
 });
 
 test('fetchSingleUrl returns error for 500 response', async () => {
-  mockFetch.mockResolvedValueOnce(
-    new Response('server error', {
-      status: 500,
-      headers: { 'content-type': 'text/plain' },
-    }),
+  // performFetch now retries transient 5xx up to PROXY_RETRY_MAX_ATTEMPTS
+  // internally. Use mockImplementation to produce a fresh Response (fresh
+  // body stream) per call so retries don't reuse an already-read body.
+  mockFetch.mockImplementation(() =>
+    Promise.resolve(
+      new Response('server error', {
+        status: 500,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    ),
   );
   const result: BatchFetchResult = await fetchSingleUrl({
     url: 'https://example.com',
@@ -427,15 +432,19 @@ test('executeBatchFetch retries failed requests once', async () => {
 });
 
 test('executeBatchFetch does not retry already retried requests', async () => {
-  mockFetch.mockResolvedValueOnce(new Response('fail', { status: 500 }));
-  mockFetch.mockResolvedValueOnce(new Response('fail-again', { status: 500 }));
+  // performFetch retries transient 5xx up to PROXY_RETRY_MAX_ATTEMPTS (2)
+  // per invocation; batch handler adds ONE extra retry for a failed task,
+  // so 2 * 2 = 4 fetches for a single failing URL.
+  mockFetch.mockImplementation(() => Promise.resolve(new Response('fail', { status: 500 })));
   const results: readonly BatchFetchResult[] = await executeBatchFetch({
     urls: ['https://a.com'],
     options: createMockOptions(),
   });
   const first: BatchFetchResult | undefined = results[0];
   expect(first?.result).toStrictEqual('error');
-  expect(mockFetch).toHaveBeenCalledTimes(2);
+  const PROXY_RETRY_ATTEMPTS: number = 2;
+  const BATCH_RETRY_ATTEMPTS: number = 2;
+  expect(mockFetch).toHaveBeenCalledTimes(PROXY_RETRY_ATTEMPTS * BATCH_RETRY_ATTEMPTS);
 });
 
 // handleBatchRequest tests

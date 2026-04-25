@@ -80,13 +80,26 @@ const tryIpRotateFallback = async (
   return ipRotateResponse;
 };
 
-// Perform fetch with IP rotation support. If the primary path returns an
-// Akamai block (403 or 200 with Access Denied HTML body) OR a transient
-// upstream failure (5xx including 660, 429, 408), retry via IP rotate
-// endpoints which present different egress IPs per region.
-export const performFetch = async (params: PerformFetchParams): Promise<Response> => {
-  const url: URL = new URL(params.currentUrl);
+// Proxy-layer retry (in addition to the per-endpoint retry loop inside
+// fetchWithRetry). The IP rotate path already retries up to 5+ endpoints with
+// hedge, so this outer loop only adds ONE extra full attempt. Keeping the
+// budget tight prevents a retry storm (proxy 3x * IP-rotate 5x * client 10x
+// = 150 upstream fetches per logical request) which was correlated with a
+// rise in 400 and 6xx errors from rate-limited / overloaded upstream.
+const PROXY_RETRY_MAX_ATTEMPTS: number = 2;
+const PROXY_RETRY_BASE_DELAY_MS: number = 300;
+const PROXY_RETRY_BACKOFF_FACTOR: number = 2;
 
+const proxyRetryDelayMs = (attempt: number): number =>
+  PROXY_RETRY_BASE_DELAY_MS * PROXY_RETRY_BACKOFF_FACTOR ** attempt;
+
+const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Execute one end-to-end attempt: primary path + single cross-path fallback.
+const performFetchSingleAttempt = async (
+  params: PerformFetchParams,
+  url: URL,
+): Promise<Response> => {
   if (!shouldUseIpRotate(params.options, url)) {
     const standardResponse: Response = await performStandardFetch(
       params.currentUrl,
@@ -119,6 +132,74 @@ export const performFetch = async (params: PerformFetchParams): Promise<Response
   // IP rotate failed or returned block/transient failure - last resort: standard fetch
   return performStandardFetch(params.currentUrl, params.headers, params.wallClockSignal);
 };
+
+interface ProxyRetryLogParams {
+  readonly attempt: number;
+  readonly reason: string;
+  readonly response: Response;
+  readonly url: URL;
+}
+
+// Emit the proxy-retry log entry and cancel the about-to-be-discarded body
+// stream so CF Worker memory does not accumulate across retries.
+const logProxyRetry = (params: ProxyRetryLogParams): void => {
+  // biome-ignore lint/suspicious/noConsole: observability for proxy-level retry
+  console.log('[proxy]', {
+    event: 'proxy-retry',
+    attempt: params.attempt,
+    reason: params.reason,
+    status: params.response.status,
+    target: params.url.toString(),
+  });
+  params.response.body?.cancel().catch(() => {});
+};
+
+interface AttemptLoopContext {
+  readonly params: PerformFetchParams;
+  readonly url: URL;
+}
+
+// Single pass of the retry loop: run the attempt, decide retry or terminate.
+const performFetchOneIteration = async (
+  ctx: AttemptLoopContext,
+  attempt: number,
+): Promise<{ readonly terminal: boolean; readonly response: Response }> => {
+  const response: Response = await performFetchSingleAttempt(ctx.params, ctx.url);
+  const reason: 'akamai-block' | 'transient-upstream-failure' | null =
+    await classifyFallbackReason(response);
+  if (reason === null || attempt === PROXY_RETRY_MAX_ATTEMPTS - 1) {
+    return { terminal: true, response };
+  }
+  logProxyRetry({ attempt, reason, response, url: ctx.url });
+  return { terminal: false, response };
+};
+
+// Recursive attempt loop with bounded retries and backoff. Honours the
+// wall-clock signal so CF Worker wall-clock budget is not exceeded.
+const runAttemptLoop = async (
+  ctx: AttemptLoopContext,
+  attempt: number,
+  lastResponse: Response | null,
+): Promise<Response> => {
+  if (attempt >= PROXY_RETRY_MAX_ATTEMPTS) {
+    return lastResponse ?? performFetchSingleAttempt(ctx.params, ctx.url);
+  }
+  if (ctx.params.wallClockSignal?.aborted && lastResponse) {
+    return lastResponse;
+  }
+  const step = await performFetchOneIteration(ctx, attempt);
+  if (step.terminal) return step.response;
+  await waitMs(proxyRetryDelayMs(attempt));
+  return runAttemptLoop(ctx, attempt + 1, step.response);
+};
+
+// Perform fetch with proxy-layer retry + IP rotation. Each attempt runs the
+// full primary+fallback flow; if the final response is still a transient
+// failure or Akamai block, we wait briefly (bounded backoff) and try again.
+// CF Worker subrequest + wall-clock budgets are respected by capping
+// PROXY_RETRY_MAX_ATTEMPTS and keeping the wall-clock signal intact.
+export const performFetch = (params: PerformFetchParams): Promise<Response> =>
+  runAttemptLoop({ params, url: new URL(params.currentUrl) }, 0, null);
 
 // Process single fetch iteration - returns response or next state for recursion
 const processFetchIteration = async (
