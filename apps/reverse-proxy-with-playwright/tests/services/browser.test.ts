@@ -126,7 +126,7 @@ describe('fetchPage', () => {
     expect(browser.newContext).toHaveBeenCalledWith({});
     expect(page.goto).toHaveBeenCalledWith('https://example.com/page', {
       waitUntil: 'domcontentloaded',
-      timeout: 60000,
+      timeout: 30000,
     });
     expect(context.close).toHaveBeenCalled();
     expect(browser.close).toHaveBeenCalled();
@@ -154,18 +154,45 @@ describe('fetchPage', () => {
     });
   });
 
-  it('should return error when launch throws', async () => {
-    vi.mocked(launchBrowser).mockRejectedValue(new Error('Browser not available'));
+  it(
+    'should return error when launch throws on every retry attempt',
+    async () => {
+      vi.mocked(launchBrowser).mockRejectedValue(new Error('Browser not available'));
+
+      const result = await fetchPage({
+        browserWorker: {} as never,
+        url: 'https://example.com/page',
+      });
+
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.errorMessage).toBe('Browser not available');
+      }
+      // fetchPage retries the failed launch up to FETCH_PAGE_RETRY_COUNT
+      // (= 4) times before surfacing the error.
+      expect(vi.mocked(launchBrowser).mock.calls.length).toBe(4);
+    },
+    20000,
+  );
+
+  it('should retry then succeed when first launch fails', async () => {
+    const page = createMockPage('<html><body>Recovered</body></html>');
+    const context = createMockContext(page);
+    const browser = createMockBrowser(context);
+    vi.mocked(launchBrowser)
+      .mockRejectedValueOnce(new Error('Transient browser failure'))
+      .mockResolvedValueOnce(browser as unknown as Browser);
 
     const result = await fetchPage({
       browserWorker: {} as never,
       url: 'https://example.com/page',
     });
 
-    expect('error' in result).toBe(true);
-    if ('error' in result) {
-      expect(result.errorMessage).toBe('Browser not available');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.html).toBe('<html><body>Recovered</body></html>');
     }
+    expect(vi.mocked(launchBrowser).mock.calls.length).toBe(2);
   });
 });
 
@@ -195,13 +222,13 @@ describe('performSignIn', () => {
     expect(result.errorMessage).toBeUndefined();
     expect(page.goto).toHaveBeenCalledWith('https://example.com/login', {
       waitUntil: 'domcontentloaded',
-      timeout: 60000,
+      timeout: 30000,
     });
     expect(page.fill).toHaveBeenCalledWith('#email', 'user@example.com');
     expect(page.fill).toHaveBeenCalledWith('#password', 'secret123');
     expect(page.click).toHaveBeenCalledWith('#submit');
     expect(page.waitForLoadState).toHaveBeenCalledWith('networkidle', {
-      timeout: 60000,
+      timeout: 30000,
     });
     expect(context.close).toHaveBeenCalled();
     expect(browser.close).toHaveBeenCalled();

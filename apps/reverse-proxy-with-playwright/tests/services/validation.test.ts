@@ -139,7 +139,7 @@ describe('checkSignedIn', () => {
     expect(context.newPage).toHaveBeenCalled();
     expect(page.goto).toHaveBeenCalledWith('https://example.com/dashboard', {
       waitUntil: 'domcontentloaded',
-      timeout: 60000,
+      timeout: 30000,
     });
     expect(page.close).toHaveBeenCalled();
   });

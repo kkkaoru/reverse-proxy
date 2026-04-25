@@ -30,6 +30,7 @@ IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
 IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
 DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
 WORKER_ID = "secondary"
+CACHE_VERSION = "v2"
 
 # Secondary worker binds to the PRIMARY worker's Durable Object class.
 # `script_name` forces this binding to reference the DO namespace owned by

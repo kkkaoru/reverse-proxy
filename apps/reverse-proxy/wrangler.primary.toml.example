@@ -30,6 +30,7 @@ IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
 IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
 DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
 WORKER_ID = "primary"
+CACHE_VERSION = "v2"
 
 # Primary worker owns the EndpointHealthCoordinator Durable Object class.
 # Both workers share the same DO via script_name on the secondary.

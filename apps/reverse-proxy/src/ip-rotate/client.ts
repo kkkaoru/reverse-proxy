@@ -27,10 +27,24 @@ const ERROR_MISSING_API_KEY = 'IP_ROTATE_API_KEY is required for api-key auth';
 const ERROR_MISSING_IAM_CREDENTIALS = 'AWS credentials are required for IAM auth';
 
 // Pure functions with guard pattern
+// Resolve endpoints for `domain`. Tries exact match first, then suffix-match
+// against the configured keys so a top-level zone like `netkeiba.com`
+// automatically rotates for subdomains such as `db.netkeiba.com` and
+// `nar.netkeiba.com` without the user having to enumerate each subdomain.
+const findEndpointKey = (config: IpRotateConfig, domain: string): string | undefined => {
+  if (Object.hasOwn(config.endpoints, domain)) return domain;
+  return Object.keys(config.endpoints).find(
+    (key: string): boolean => domain === key || domain.endsWith(`.${key}`),
+  );
+};
+
 const getEndpointList = (
   config: IpRotateConfig,
   domain: string,
-): readonly EndpointWithApiKey[] | undefined => config.endpoints[domain];
+): readonly EndpointWithApiKey[] | undefined => {
+  const key: string | undefined = findEndpointKey(config, domain);
+  return key !== undefined ? config.endpoints[key] : undefined;
+};
 
 const isIpRotateTarget = (config: IpRotateConfig, domain: string): boolean =>
   getEndpointList(config, domain) !== undefined;

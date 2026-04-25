@@ -151,6 +151,10 @@ const STATUS_TOO_MANY_REQUESTS: number = 429;
 const STATUS_REQUEST_TIMEOUT: number = 408;
 const STATUS_WORKER_RESOURCE_EXHAUSTED: number = 533;
 const STATUS_EXTENDED_ERROR_END: number = 700;
+// AWS API Gateway returns 400 Bad Request when its per-region throttle is
+// exceeded under burst load. The upstream URL itself is well-formed, so
+// retrying via a different IP-rotate endpoint usually succeeds.
+const STATUS_BAD_REQUEST: number = 400;
 const MIN_RETRIES: number = 5;
 const ABSOLUTE_MAX_RETRIES: number = 20;
 const ERROR_ALL_ENDPOINTS_FAILED: string = 'All endpoints failed';
@@ -328,14 +332,16 @@ const fetchWithAuth = async (params: FetchWithAuthParams): Promise<Response> => 
 
 // Helper functions for retry logic
 // Retry for 5xx server errors, 6xx non-standard upstream/proxy codes
-// (e.g. 660 emitted by some infrastructure), 429 rate limit, and 408
-// request timeout. 533 (Cloudflare Worker resource exhausted) is NOT
-// retried because rotating IPs cannot fix a local Worker constraint.
+// (e.g. 660 emitted by some infrastructure), 429 rate limit, 408 request
+// timeout, and 400 Bad Request (AWS API Gateway burst-throttle rejection).
+// 533 (Cloudflare Worker resource exhausted) is NOT retried because
+// rotating IPs cannot fix a local Worker constraint.
 const isRetriableStatus = (status: number): boolean => {
   if (status === STATUS_WORKER_RESOURCE_EXHAUSTED) return false;
   if (status >= STATUS_SERVER_ERROR_START && status < STATUS_EXTENDED_ERROR_END) return true;
   if (status === STATUS_TOO_MANY_REQUESTS) return true;
   if (status === STATUS_REQUEST_TIMEOUT) return true;
+  if (status === STATUS_BAD_REQUEST) return true;
   return false;
 };
 

@@ -11,6 +11,8 @@ import { fetchWithRetry } from '../ip-rotate/fetch.ts';
 import type { FetchRetryResult, IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
 import { isAkamaiBlockBody } from '../proxy/fetch/akamai.ts';
 
+export { isAkamaiBlockBody };
+
 // Interfaces
 export interface PlaywrightCoreEnv {
   KV?: KVNamespace;
@@ -149,9 +151,11 @@ export const LOG_REQUESTS_ENABLED: string = 'TRUE';
 export const PLAYWRIGHT_PATH: string = '/playwright';
 export const METHOD_GET: string = 'GET';
 export const LOG_EVENT_IP_ROTATE: string = 'ip-rotate-fetch';
-// Wall clock timeout: 80s (40s margin below Cloudflare's 120s Proxy Read Timeout)
-// See: https://developers.cloudflare.com/fundamentals/reference/connection-limits/
-export const WALL_CLOCK_TIMEOUT_MS: number = 80000;
+// Wall clock cap on the IP-rotate stage so that a slow upstream cannot
+// monopolise the request budget. Keeping this short leaves room for the
+// browser fallback to also run within Cloudflare Workers' CPU/wall-clock
+// limit and within the client-side timeout (90s).
+export const WALL_CLOCK_TIMEOUT_MS: number = 20000;
 
 // IP Rotate functions
 export const parseIpRotateConfigFromEnv = (env: PlaywrightCoreEnv): IpRotateConfig | undefined => {
@@ -213,20 +217,37 @@ export const fetchViaIpRotateForPlaywright = async (
   return result.success ? result.response : result.lastResponse;
 };
 
+const IP_ROTATE_MOJIBAKE_THRESHOLD: number = 5;
+const IP_ROTATE_REPLACEMENT_CHAR_REGEX: RegExp = /�/g;
+
+const isLikelyMojibakeContent = (text: string): boolean => {
+  const matches: RegExpMatchArray | null = text.match(IP_ROTATE_REPLACEMENT_CHAR_REGEX);
+  return (matches?.length ?? 0) >= IP_ROTATE_MOJIBAKE_THRESHOLD;
+};
+
+// Reasons that cause the IP-rotate path to bail out and let the caller fall
+// through to the browser-backed fetch path (or surface the failure).
+const ipRotateRejectReason = (content: string): 'empty' | 'akamai-block' | 'mojibake' | null => {
+  if (content.length === 0) return 'empty';
+  if (isAkamaiBlockBody(content)) return 'akamai-block';
+  if (isLikelyMojibakeContent(content)) return 'mojibake';
+  return null;
+};
+
+const buildSuccessfulIpRotateResult = (response: Response, content: string): FetchPageResponse => ({
+  content,
+  contentType: response.headers.get(HEADER_CONTENT_TYPE) ?? CONTENT_TYPE_HTML,
+  status: response.status,
+});
+
 export const tryFetchWithIpRotate = async (
   env: PlaywrightCoreEnv,
   targetUrl: string,
   options: IpRotateOptions,
 ): Promise<FetchPageResponse | null> => {
   const url: URL = new URL(targetUrl);
-
-  if (!shouldUseIpRotateForPlaywright(options.config, url)) {
-    return null;
-  }
-
-  if (!options.config) {
-    return null;
-  }
+  if (!shouldUseIpRotateForPlaywright(options.config, url)) return null;
+  if (!options.config) return null;
 
   const wallClockSignal: AbortSignal = AbortSignal.timeout(WALL_CLOCK_TIMEOUT_MS);
   const response: Response | null = await fetchViaIpRotateForPlaywright({
@@ -235,21 +256,18 @@ export const tryFetchWithIpRotate = async (
     counters: options.counters,
     wallClockSignal,
   });
-
-  if (!response) {
-    return null;
-  }
+  if (!response) return null;
 
   logEvent(env, LOG_EVENT_IP_ROTATE, { target: targetUrl });
 
   const content: string = await response.text();
-  const contentType: string = response.headers.get(HEADER_CONTENT_TYPE) ?? CONTENT_TYPE_HTML;
-
-  return {
-    content,
-    contentType,
-    status: response.status,
-  };
+  const reject: 'empty' | 'akamai-block' | 'mojibake' | null = ipRotateRejectReason(content);
+  if (reject !== null) {
+    // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
+    console.log(LOG_PREFIX, `ip-rotate-${reject}`, { target: targetUrl });
+    return null;
+  }
+  return buildSuccessfulIpRotateResult(response, content);
 };
 
 // Functions
@@ -264,11 +282,20 @@ export const logEvent = (env: PlaywrightCoreEnv, event: string, detail: LogEvent
   console.log(LOG_PREFIX, event, detail);
 };
 
+// `page.content()` returns a UTF-16 JS string which the Response constructor
+// always serialises as UTF-8 bytes. Forwarding the upstream content-type
+// charset (e.g. `text/html; charset=euc-jp`) makes clients re-decode UTF-8
+// bytes as EUC-JP, yielding mojibake. Override HTML content-type to declare
+// the actual on-the-wire encoding (utf-8); leave non-HTML content-type
+// untouched so clients still see the upstream binary content type.
+const normalizeHtmlContentType = (contentType: string): string =>
+  isHtmlContentType(contentType) ? CONTENT_TYPE_HTML : contentType;
+
 export const createContentResponse = (params: CreateContentResponseParams): Response =>
   new Response(params.content, {
     status: STATUS_OK,
     headers: {
-      [HEADER_CONTENT_TYPE]: params.contentType,
+      [HEADER_CONTENT_TYPE]: normalizeHtmlContentType(params.contentType),
       [HEADER_X_CACHE]: params.cacheStatus,
     },
   });

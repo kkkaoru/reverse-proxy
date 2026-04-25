@@ -28,6 +28,7 @@ IP_ROTATE_AWS_REGION = "${IP_ROTATE_AWS_REGION}"
 IP_ROTATE_BANNED_REGIONS = "${IP_ROTATE_BANNED_REGIONS}"
 # Default fetch timeout in milliseconds (optional, default: 2000)
 DEFAULT_TIMEOUT_MS = "${DEFAULT_TIMEOUT_MS}"
+CACHE_VERSION = "v2"
 # IP rotation tuning (all optional, shown with defaults)
 # IP_ROTATE_HEALTH_TTL_MS = "60000"
 # IP_ROTATE_EWMA_HALF_LIFE_MS = "30000"

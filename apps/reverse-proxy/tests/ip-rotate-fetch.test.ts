@@ -247,11 +247,14 @@ describe('ip-rotate-fetch retry logic', () => {
     expect(isRetriableStatus(STATUS_TOO_MANY_REQUESTS)).toBe(true);
   });
 
-  test('isRetriableStatus returns false for 2xx/3xx/4xx (except 429)', () => {
+  test('isRetriableStatus returns false for 2xx/3xx/4xx (except 400/429)', () => {
     expect(isRetriableStatus(200)).toBe(false);
     expect(isRetriableStatus(301)).toBe(false);
-    expect(isRetriableStatus(400)).toBe(false);
     expect(isRetriableStatus(404)).toBe(false);
+  });
+
+  test('isRetriableStatus returns true for 400 (api gateway throttle)', () => {
+    expect(isRetriableStatus(400)).toBe(true);
   });
 
   test('isServerErrorStatus returns true for 5xx', () => {

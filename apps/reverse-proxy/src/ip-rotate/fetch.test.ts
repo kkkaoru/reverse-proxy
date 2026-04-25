@@ -147,8 +147,8 @@ test('isRetriableStatus false for 200', () => {
   expect(isRetriableStatus(200)).toBe(false);
 });
 
-test('isRetriableStatus false for 400', () => {
-  expect(isRetriableStatus(400)).toBe(false);
+test('isRetriableStatus true for 400 (api gateway throttle)', () => {
+  expect(isRetriableStatus(400)).toBe(true);
 });
 
 test('isRetriableStatus false for 403', () => {
@@ -777,7 +777,7 @@ test('fetchWithRetry returns 404 as success without retry', async () => {
   expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 });
 
-test('fetchWithRetry returns 400 as success without retry', async () => {
+test('fetchWithRetry retries 400 (api gateway throttle) and surfaces final 400', async () => {
   globalThis.fetch = vi.fn().mockResolvedValue(new Response('Bad Request', { status: 400 }));
 
   const result = await fetchWithRetry({
@@ -796,11 +796,8 @@ test('fetchWithRetry returns 400 as success without retry', async () => {
     method: 'GET',
   });
 
-  expect(result.success).toBe(true);
-  if (result.success) {
-    expect(result.response.status).toBe(400);
-  }
-  expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  expect(result.success).toBe(false);
+  expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1);
 });
 
 test('fetchWithRetry retries on 429 throttled', async () => {

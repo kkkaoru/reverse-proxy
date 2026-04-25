@@ -16,6 +16,7 @@ import {
   HEADER_CONTENT_TYPE,
   handleCoreRequest,
   handleDeleteRequest,
+  isAkamaiBlockBody,
   isHtmlContentType,
   parseRequest,
   resolveIpRotateConfigForPlaywright,
@@ -49,10 +50,15 @@ const ipRotateConfigCache: Map<string, IpRotateConfig> = new Map();
 const IP_ROTATE_CONFIG_KEY = 'default';
 
 // Constants
-const BROWSER_DEFAULT_TIMEOUT_MS: number = 30000;
+// Worker total budget must fit within Cloudflare Workers CPU/wall-clock
+// limits. Worst-case browser attempts: BROWSER_RETRY_COUNT * (BROWSER_DEFAULT_TIMEOUT_MS
+// + BROWSER_RETRY_DELAY_MS * attempt). With the values below: 3 * (20s + up
+// to 3s backoff) ~= 69s, leaving headroom for IP-rotate fallback within the
+// CPU budget declared in wrangler.toml (cpu_ms = 300_000).
+const BROWSER_DEFAULT_TIMEOUT_MS: number = 20000;
 const BROWSER_WAIT_UNTIL: WaitUntilState = 'domcontentloaded';
-const BROWSER_RETRY_COUNT: number = 10;
-const BROWSER_RETRY_DELAY_MS: number = 2000;
+const BROWSER_RETRY_COUNT: number = 3;
+const BROWSER_RETRY_DELAY_MS: number = 1000;
 
 // Load IP rotation config with module-level caching
 const getOrLoadIpRotateConfig = async (
@@ -73,6 +79,50 @@ const getOrLoadIpRotateConfig = async (
 const getResponseContentType = (response: Awaited<ReturnType<Page['goto']>>): string =>
   response?.headers()[HEADER_CONTENT_TYPE] ?? CONTENT_TYPE_HTML;
 
+// Cloudflare Browser sometimes returns successful navigation (status 200) but
+// page.content() yields an empty string - usually because the upstream wiped
+// the body via JS or the navigation completed before any HTML was parsed.
+// Treat this as a transient failure so the surrounding retry loop can take
+// another shot rather than caching/serving empty content.
+const ERROR_EMPTY_PAGE_CONTENT: string = 'Empty page content from browser';
+
+// Cloudflare Browser may also receive an Akamai "Access Denied" block page
+// when the egress IP is on the upstream CDN's blocklist. Throw so the retry
+// loop tries again with a different browser session and the block page is
+// never persisted to cache.
+const ERROR_AKAMAI_BLOCK_PAGE: string = 'Akamai block page returned to browser';
+
+// Mojibake detection: even a handful of U+FFFD replacement characters in a
+// CJK-only document is a strong signal that the upstream EUC-JP page was
+// decoded incorrectly. The threshold is intentionally low because mojibake
+// often shows up only on rare CJK characters such as horse names, while the
+// surrounding HTML scaffold remains ASCII-clean and would otherwise hide
+// the corruption from a higher-threshold check.
+const MOJIBAKE_REPLACEMENT_THRESHOLD: number = 5;
+const ERROR_MOJIBAKE_CONTENT: string = 'Mojibake content from browser';
+// Use the explicit U+FFFD escape rather than the literal character to avoid
+// any source-file encoding ambiguity when this code is bundled.
+const REPLACEMENT_CHAR_REGEX: RegExp = /\uFFFD/g;
+
+const countReplacementChars = (text: string): number => {
+  const matches: RegExpMatchArray | null = text.match(REPLACEMENT_CHAR_REGEX);
+  return matches?.length ?? 0;
+};
+
+const isMojibakeContent = (text: string): boolean =>
+  countReplacementChars(text) >= MOJIBAKE_REPLACEMENT_THRESHOLD;
+
+const readDecodedHtml = async (
+  page: Page,
+  response: Awaited<ReturnType<Page['goto']>>,
+  contentType: string,
+): Promise<string> => {
+  if (!isHtmlContentType(contentType)) {
+    return (await response?.text()) ?? '';
+  }
+  return page.content();
+};
+
 const fetchPageOnce = async (
   browserWorker: BrowserWorker,
   url: string,
@@ -89,9 +139,27 @@ const fetchPageOnce = async (
 
     const status: number = response?.status() ?? 200;
     const contentType: string = getResponseContentType(response);
-    const content: string = isHtmlContentType(contentType)
-      ? await page.content()
-      : ((await response?.text()) ?? '');
+    const content: string = await readDecodedHtml(page, response, contentType);
+
+    if (content.length === 0) {
+      throw new Error(ERROR_EMPTY_PAGE_CONTENT);
+    }
+
+    // Akamai may serve a small "Access Denied" HTML body wrapped in a 200
+    // response when the egress IP is on its blocklist. Throwing here makes
+    // the retry loop (which obtains a new browser session per attempt)
+    // cycle through different egress paths instead of caching the block.
+    if (isAkamaiBlockBody(content)) {
+      throw new Error(ERROR_AKAMAI_BLOCK_PAGE);
+    }
+
+    // Mojibake detection: Cloudflare Browser sometimes fails to decode
+    // non-UTF-8 pages, leaving the content string riddled with U+FFFD. Treat
+    // as failure so the retry loop tries again (a new context/session may
+    // pick a different decode path) and so we don't cache mojibake.
+    if (isMojibakeContent(content)) {
+      throw new Error(ERROR_MOJIBAKE_CONTENT);
+    }
 
     return { content, contentType, status };
   } finally {

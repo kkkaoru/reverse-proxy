@@ -6,6 +6,9 @@ import {
   BROWSER_DEFAULT_TIMEOUT_MS,
   BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
   BROWSER_WAIT_UNTIL_NETWORKIDLE,
+  EMPTY_PAGE_CONTENT_ERROR,
+  FETCH_PAGE_RETRY_BASE_DELAY_MS,
+  FETCH_PAGE_RETRY_COUNT,
 } from '../constants/index.ts';
 // Note: Playwright handles encoding automatically via browser engine
 import { launchBrowser } from './browser-launcher.ts';
@@ -94,36 +97,69 @@ const convertToStorageState = (rawState: RawStorageState): StorageState => ({
 const buildContextOptions = (storageState?: StorageState): ContextOptions =>
   storageState ? { storageState } : {};
 
-export const fetchPage = async (
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchPageOnce = async (
   params: FetchPageParams,
-): Promise<FetchPageResult | FetchPageError> => {
-  const contextOptions: ContextOptions = buildContextOptions(params.storageState);
-
+  contextOptions: ContextOptions,
+): Promise<FetchPageResult> => {
+  const browser: Browser = await launchBrowser(params.browserWorker);
+  const context: BrowserContext = await browser.newContext(contextOptions);
+  const page: Page = await context.newPage();
   try {
-    const browser: Browser = await launchBrowser(params.browserWorker);
-    const context: BrowserContext = await browser.newContext(contextOptions);
-    const page: Page = await context.newPage();
-
     await page.goto(params.url, {
       waitUntil: BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
       timeout: BROWSER_DEFAULT_TIMEOUT_MS,
     });
-
-    // Get HTML content (Playwright already handles encoding correctly)
     const html: string = await page.content();
-
+    if (html.length === 0) {
+      throw new Error(EMPTY_PAGE_CONTENT_ERROR);
+    }
     const rawStorageState = await context.storageState();
     const storageState: StorageState = convertToStorageState(rawStorageState);
-
+    return { html, storageState };
+  } finally {
     await context.close();
     await browser.close();
-
-    return { html, storageState };
-  } catch (error) {
-    const errorMessage: string = error instanceof Error ? error.message : UNKNOWN_ERROR_PAGE_FETCH;
-    return { error: true, errorMessage };
   }
 };
+
+interface AttemptFetchPageParams {
+  params: FetchPageParams;
+  contextOptions: ContextOptions;
+  attempt: number;
+  lastError: string;
+}
+
+const attemptFetchPage = async (
+  args: AttemptFetchPageParams,
+): Promise<FetchPageResult | FetchPageError> => {
+  if (args.attempt > FETCH_PAGE_RETRY_COUNT) {
+    return { error: true, errorMessage: args.lastError };
+  }
+  try {
+    return await fetchPageOnce(args.params, args.contextOptions);
+  } catch (error) {
+    const errorMessage: string = error instanceof Error ? error.message : UNKNOWN_ERROR_PAGE_FETCH;
+    if (args.attempt < FETCH_PAGE_RETRY_COUNT) {
+      await sleep(FETCH_PAGE_RETRY_BASE_DELAY_MS * args.attempt);
+    }
+    return attemptFetchPage({
+      params: args.params,
+      contextOptions: args.contextOptions,
+      attempt: args.attempt + 1,
+      lastError: errorMessage,
+    });
+  }
+};
+
+export const fetchPage = (params: FetchPageParams): Promise<FetchPageResult | FetchPageError> =>
+  attemptFetchPage({
+    params,
+    contextOptions: buildContextOptions(params.storageState),
+    attempt: 1,
+    lastError: UNKNOWN_ERROR_PAGE_FETCH,
+  });
 
 export const performSignIn = async (params: SignInParams): Promise<SignInResult> => {
   const contextOptions: ContextOptions = buildContextOptions(params.storageState);

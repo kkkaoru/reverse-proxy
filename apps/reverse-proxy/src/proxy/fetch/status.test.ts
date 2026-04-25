@@ -88,8 +88,8 @@ test('isTransientUpstreamFailureStatus returns false for 403 forbidden', () => {
   expect(isTransientUpstreamFailureStatus(403)).toBe(false);
 });
 
-test('isTransientUpstreamFailureStatus returns false for 400 bad request', () => {
-  expect(isTransientUpstreamFailureStatus(400)).toBe(false);
+test('isTransientUpstreamFailureStatus returns true for 400 bad request (api gateway throttle)', () => {
+  expect(isTransientUpstreamFailureStatus(400)).toBe(true);
 });
 
 test('isTransientUpstreamFailureStatus returns true for 600 start of 6xx range', () => {
