@@ -63,8 +63,13 @@ export const ERROR_BODY_SLICE_LENGTH: number = 500;
 // Cloudflare Connection Limits (https://developers.cloudflare.com/fundamentals/reference/connection-limits/):
 //   - Proxy Read Timeout: 120s (Error 524) - binding constraint for HTTP response wait
 //   - TCP ACK Timeout: 90s (Error 522) - TCP-level ACK, not HTTP response (OS handles automatically)
-// 80s provides 40s safety margin below the 120s Proxy Read Timeout
-export const WALL_CLOCK_TIMEOUT_MS: number = 80000;
+// 30s lets the simple path fail fast on stuck IP-rotate / standard fetch so
+// the keiba-side caller can swing to the /playwright path on the next retry
+// instead of blocking the whole batch on a single 60-80s hang. Empirically
+// most healthy upstream replies complete within 5-10s; pages that need
+// >30s through the simple path almost always require browser-backed
+// /playwright anyway.
+export const WALL_CLOCK_TIMEOUT_MS: number = 30000;
 
 // Error messages
 export const ERROR_MISSING_URL: string = 'Query parameter "url" is required.';
