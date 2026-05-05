@@ -1,7 +1,11 @@
 import { Hono } from 'hono';
 import iconv from 'iconv-lite';
 import { describe, expect, it, vi } from 'vitest';
-import { createProxyCacheMiddleware } from '../src/proxy/middleware.ts';
+import {
+  createProxyCacheMiddleware,
+  getFirstBatchTarget,
+  isBatchRequestBody,
+} from '../src/proxy/middleware.ts';
 import type { ProxyCacheEnv, ProxyCacheStaticOptions } from '../src/proxy/types.ts';
 import { setupEnvironment } from './helpers.ts';
 
@@ -201,6 +205,22 @@ interface ErrorResponseBody {
 }
 
 describe('proxy middleware POST batch', () => {
+  it('extracts first batch target for health sync', () => {
+    const body = {
+      urls: ['https://example.com/one', 'https://example.com/two'],
+    };
+
+    expect(isBatchRequestBody(body)).toBe(true);
+    expect(getFirstBatchTarget(body)).toBe('https://example.com/one');
+  });
+
+  it('does not extract first batch target from invalid body', () => {
+    const body = { urls: ['https://example.com/one', 123] };
+
+    expect(isBatchRequestBody(body)).toBe(false);
+    expect(getFirstBatchTarget(body)).toBeUndefined();
+  });
+
   it('handles POST request with valid urls array', async () => {
     setupEnvironment(() =>
       Promise.resolve(

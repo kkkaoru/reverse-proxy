@@ -32,6 +32,10 @@ interface CachedConfigEntry {
   readonly cachedAt: number;
 }
 
+interface BatchRequestBody {
+  readonly urls: readonly string[];
+}
+
 // Module-level counter for IP rotation round-robin
 const ipRotateCounters: Map<string, number> = new Map();
 
@@ -60,13 +64,29 @@ const getOrLoadIpRotateConfig = async (
 };
 
 // Handle POST batch request
-const handlePostRequest = async (
-  c: Context,
-  batchHandler: BatchRequestHandler,
-): Promise<Response> => {
-  const body: unknown = await c.req.json().catch((): null => null);
+const handlePostRequest = (body: unknown, batchHandler: BatchRequestHandler): Promise<Response> => {
   return batchHandler(body);
 };
+
+const parsePostRequestBody = (c: Context): Promise<unknown> => c.req.json().catch((): null => null);
+
+const isBatchRequestBody = (body: unknown): body is BatchRequestBody => {
+  if (typeof body !== 'object' || body === null) return false;
+  const urlsProperty: PropertyDescriptor | undefined = Object.getOwnPropertyDescriptor(
+    body,
+    'urls',
+  );
+  return (
+    Array.isArray(urlsProperty?.value) &&
+    urlsProperty.value.every((url: unknown): url is string => typeof url === 'string')
+  );
+};
+
+const getFirstBatchTarget = (body: unknown): string | undefined =>
+  isBatchRequestBody(body) ? body.urls[0] : undefined;
+
+const getHealthSyncTarget = (c: Context, postBody: unknown | undefined): string | undefined =>
+  c.req.method === METHOD_POST ? getFirstBatchTarget(postBody) : c.req.query(QUERY_KEY_TARGET);
 
 // Sync health state from Durable Object / Cache API into local counters
 interface SyncHealthFromDoParams {
@@ -130,6 +150,9 @@ export const createProxyCacheMiddleware = (
       return;
     }
 
+    const postBody: unknown | undefined =
+      c.req.method === METHOD_POST ? await parsePostRequestBody(c) : undefined;
+
     const ipRotateConfig: IpRotateConfig | undefined = await getOrLoadIpRotateConfig(
       c.env,
       ipRotateConfigCache,
@@ -139,7 +162,7 @@ export const createProxyCacheMiddleware = (
     await syncHealthFromDo({
       ipRotateConfig,
       healthCoordinator: c.env.HEALTH_COORDINATOR,
-      targetQuery: c.req.query(QUERY_KEY_TARGET),
+      targetQuery: getHealthSyncTarget(c, postBody),
     });
 
     const options: ProxyCacheOptions = {
@@ -155,7 +178,7 @@ export const createProxyCacheMiddleware = (
 
     // Handle POST for batch requests
     if (c.req.method === METHOD_POST) {
-      return handlePostRequest(c, batchHandler);
+      return handlePostRequest(postBody, batchHandler);
     }
 
     // Handle query-based requests (GET/HEAD/DELETE)
@@ -171,9 +194,11 @@ export const createProxyCacheMiddleware = (
 
 export {
   CONFIG_CACHE_TTL_MS,
+  getFirstBatchTarget,
   getExecutionCtx,
   getOrLoadIpRotateConfig,
   isCacheValid,
+  isBatchRequestBody,
   syncHealthFromDo,
 };
 export type { CachedConfigEntry, SyncHealthFromDoParams };
