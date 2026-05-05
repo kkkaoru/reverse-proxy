@@ -154,26 +154,22 @@ describe('fetchPage', () => {
     });
   });
 
-  it(
-    'should return error when launch throws on every retry attempt',
-    async () => {
-      vi.mocked(launchBrowser).mockRejectedValue(new Error('Browser not available'));
+  it('should return error when launch throws on every retry attempt', async () => {
+    vi.mocked(launchBrowser).mockRejectedValue(new Error('Browser not available'));
 
-      const result = await fetchPage({
-        browserWorker: {} as never,
-        url: 'https://example.com/page',
-      });
+    const result = await fetchPage({
+      browserWorker: {} as never,
+      url: 'https://example.com/page',
+    });
 
-      expect('error' in result).toBe(true);
-      if ('error' in result) {
-        expect(result.errorMessage).toBe('Browser not available');
-      }
-      // fetchPage retries the failed launch up to FETCH_PAGE_RETRY_COUNT
-      // (= 4) times before surfacing the error.
-      expect(vi.mocked(launchBrowser).mock.calls.length).toBe(4);
-    },
-    20000,
-  );
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.errorMessage).toBe('Browser not available');
+    }
+    // fetchPage retries the failed launch up to FETCH_PAGE_RETRY_COUNT
+    // (= 4) times before surfacing the error.
+    expect(vi.mocked(launchBrowser).mock.calls.length).toBe(4);
+  }, 20000);
 
   it('should retry then succeed when first launch fails', async () => {
     const page = createMockPage('<html><body>Recovered</body></html>');
