@@ -1,6 +1,9 @@
 // Core fetch operations
 // Execute with bun: wrangler dev
 
+import type { FailureCategory } from '../classifier/categories.ts';
+import { routeForCategory } from '../classifier/categories.ts';
+import { classifyResponse } from '../classifier/response-classifier.ts';
 import {
   CACHE_MODE_NO_STORE,
   MAX_REDIRECTS,
@@ -8,12 +11,11 @@ import {
   WALL_CLOCK_TIMEOUT_MS,
 } from '../constants.ts';
 import type { FetchAndCacheParams, ProxyCacheOptions } from '../types.ts';
-import { isAkamaiBlockedResponse } from './akamai.ts';
 import { buildFetchHeaders } from './headers.ts';
-import { performIpRotateFetch, shouldUseIpRotate } from './ip-rotate.ts';
+import { performIpRotateFetch } from './ip-rotate.ts';
 import { createTooManyRedirectsResponse, handleRedirect } from './redirect.ts';
 import { processFetchResponse } from './response.ts';
-import { isRedirectStatus, isTransientUpstreamFailureStatus } from './status.ts';
+import { isRedirectStatus } from './status.ts';
 
 // Recursive fetch state interface
 interface FetchState {
@@ -42,43 +44,18 @@ export const performStandardFetch = (
     signal,
   });
 
-// Decide whether a response should trigger the IP rotate fallback path.
-// Returns a label describing the failure reason, or null if the response is
-// considered acceptable and should be returned to the caller.
-const classifyFallbackReason = async (
-  response: Response,
-): Promise<'akamai-block' | 'transient-upstream-failure' | null> => {
-  if (await isAkamaiBlockedResponse(response)) return 'akamai-block';
-  if (isTransientUpstreamFailureStatus(response.status)) {
-    return 'transient-upstream-failure';
-  }
-  return null;
-};
+// Decide whether a response should trigger the IP rotate / browser
+// fallback path. Returns the abstract FailureCategory (or null when
+// the response is acceptable). Domain-specific signals (Akamai HTML
+// markers, mojibake, empty bodies, transient 5xx codes) are mapped to
+// categories inside response-classifier so the caller does not need
+// to know which one matched.
+const classifyFallbackReason = async (response: Response): Promise<FailureCategory> =>
+  classifyResponse({ response });
 
-// Try falling back to IP rotate (AWS API Gateway regional egress). Returns
-// null if fallback is not configured or itself returned an unrecoverable
-// response (Akamai block or transient upstream failure).
-const tryIpRotateFallback = async (
-  params: PerformFetchParams,
-  url: URL,
-): Promise<Response | null> => {
-  if (!params.options.ipRotateConfig) return null;
-  const ipRotateResponse: Response | null = await performIpRotateFetch({
-    options: params.options,
-    url,
-    headers: params.headers,
-    wallClockSignal: params.wallClockSignal,
-  });
-  if (!ipRotateResponse) return null;
-  if ((await classifyFallbackReason(ipRotateResponse)) !== null) return null;
-  // biome-ignore lint/suspicious/noConsole: observability for fallback behavior
-  console.log('[proxy]', {
-    event: 'ip-rotate-recovered',
-    target: url.toString(),
-    status: ipRotateResponse.status,
-  });
-  return ipRotateResponse;
-};
+// Backwards-compat label helper for the structured logs that older
+// observability dashboards still grep for.
+const failureReasonLabel = (category: FailureCategory): string => category ?? 'none';
 
 // Proxy-layer retry (in addition to the per-endpoint retry loop inside
 // fetchWithRetry). The IP rotate path already retries up to 5+ endpoints with
@@ -95,41 +72,76 @@ const proxyRetryDelayMs = (attempt: number): number =>
 
 const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Execute one end-to-end attempt: primary path + single cross-path fallback.
+// Hedged fetch: race IP-rotate vs standard fetch in parallel and take
+// the first acceptable response. The non-winning request is left to
+// settle in the background (its body is cancelled by the caller's
+// wall-clock signal). Eliminates the simple→IP-rotate sequential wait
+// when one path is intermittently slow (a recurring pattern observed
+// for NAR / obihiro race pages where simple-path latency varies from
+// 5s to >25s for the same URL).
+//
+// Returns:
+//   - winning Response when at least one path produced an acceptable
+//     answer (FailureCategory === null per classifyFallbackReason);
+//   - null when both paths failed / returned an unrecoverable category
+//     so the caller can decide whether to retry.
+const HEDGED_RACE_LOG_LIMIT: number = 1 satisfies number;
+const HEDGED_RACE_LOG_DUMMY_INDEX: number = 0 satisfies number;
+
+const racingFetch = async (params: PerformFetchParams, url: URL): Promise<Response | null> => {
+  const candidates: Promise<Response | null>[] = [
+    performStandardFetch(params.currentUrl, params.headers, params.wallClockSignal).catch(
+      () => null,
+    ),
+  ];
+  if (params.options.ipRotateConfig) {
+    candidates.push(
+      performIpRotateFetch({
+        options: params.options,
+        url,
+        headers: params.headers,
+        wallClockSignal: params.wallClockSignal,
+      }).catch(() => null),
+    );
+  }
+
+  // Promise.allSettled then filter retains the ability to fall back
+  // to whichever finished if neither is "acceptable" per the routing
+  // strategy. Promise.race alone would surface the FIRST settled
+  // promise even if it failed.
+  const settled: PromiseSettledResult<Response | null>[] = await Promise.allSettled(candidates);
+  const fulfilled: Response[] = settled
+    .filter(
+      (r: PromiseSettledResult<Response | null>): r is PromiseFulfilledResult<Response> =>
+        r.status === 'fulfilled' && r.value !== null,
+    )
+    .map((r: PromiseFulfilledResult<Response>) => r.value);
+
+  // Classify all candidates in parallel and pick the first acceptable
+  // one (FailureCategory === null). If none are acceptable, return the
+  // first concrete Response so the caller can inspect status and fall
+  // back to the browser path.
+  const reasons: FailureCategory[] = await Promise.all(
+    fulfilled.map((r: Response) => classifyFallbackReason(r)),
+  );
+  const acceptableIndex: number = reasons.findIndex((r: FailureCategory) => r === null);
+  const fallbackIndex: number = HEDGED_RACE_LOG_DUMMY_INDEX;
+  if (acceptableIndex >= HEDGED_RACE_LOG_DUMMY_INDEX) {
+    return fulfilled[acceptableIndex] ?? null;
+  }
+  return fulfilled.length >= HEDGED_RACE_LOG_LIMIT ? (fulfilled[fallbackIndex] ?? null) : null;
+};
+
+// Execute one end-to-end attempt: hedged primary+secondary path.
 const performFetchSingleAttempt = async (
   params: PerformFetchParams,
   url: URL,
 ): Promise<Response> => {
-  if (!shouldUseIpRotate(params.options, url)) {
-    const standardResponse: Response = await performStandardFetch(
-      params.currentUrl,
-      params.headers,
-      params.wallClockSignal,
-    );
-    const reason: 'akamai-block' | 'transient-upstream-failure' | null =
-      await classifyFallbackReason(standardResponse);
-    if (reason === null) return standardResponse;
-    // biome-ignore lint/suspicious/noConsole: observability for fallback trigger
-    console.log('[proxy]', {
-      event: 'standard-fetch-fallback',
-      reason,
-      target: url.toString(),
-      status: standardResponse.status,
-    });
-    const recovered: Response | null = await tryIpRotateFallback(params, url);
-    return recovered ?? standardResponse;
-  }
-
-  const ipRotateResponse: Response | null = await performIpRotateFetch({
-    options: params.options,
-    url,
-    headers: params.headers,
-    wallClockSignal: params.wallClockSignal,
-  });
-  if (ipRotateResponse !== null && (await classifyFallbackReason(ipRotateResponse)) === null) {
-    return ipRotateResponse;
-  }
-  // IP rotate failed or returned block/transient failure - last resort: standard fetch
+  const hedged: Response | null = await racingFetch(params, url);
+  if (hedged !== null) return hedged;
+  // Both paths threw — last-resort: try standard fetch one more time
+  // so the caller gets a real Response object (even if it's an error
+  // status) to inspect rather than a thrown exception.
   return performStandardFetch(params.currentUrl, params.headers, params.wallClockSignal);
 };
 
@@ -159,18 +171,29 @@ interface AttemptLoopContext {
   readonly url: URL;
 }
 
+// Categories that the routing strategy says should not be retried at
+// the proxy layer. `null` (success) and `client-error` ('fail' route)
+// both terminate the attempt loop immediately so we don't waste retry
+// budget on a permanent 4xx like 404.
+const isTerminalCategory = (reason: FailureCategory): boolean =>
+  reason === null || routeForCategory(reason) === 'fail';
+
 // Single pass of the retry loop: run the attempt, decide retry or terminate.
 const performFetchOneIteration = async (
   ctx: AttemptLoopContext,
   attempt: number,
 ): Promise<{ readonly terminal: boolean; readonly response: Response }> => {
   const response: Response = await performFetchSingleAttempt(ctx.params, ctx.url);
-  const reason: 'akamai-block' | 'transient-upstream-failure' | null =
-    await classifyFallbackReason(response);
-  if (reason === null || attempt === PROXY_RETRY_MAX_ATTEMPTS - 1) {
+  const reason: FailureCategory = await classifyFallbackReason(response);
+  if (isTerminalCategory(reason) || attempt === PROXY_RETRY_MAX_ATTEMPTS - 1) {
     return { terminal: true, response };
   }
-  logProxyRetry({ attempt, reason, response, url: ctx.url });
+  logProxyRetry({
+    attempt,
+    reason: failureReasonLabel(reason),
+    response,
+    url: ctx.url,
+  });
   return { terminal: false, response };
 };
 
