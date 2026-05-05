@@ -52,13 +52,18 @@ const IP_ROTATE_CONFIG_KEY = 'default';
 // Constants
 // Worker total budget must fit within Cloudflare Workers CPU/wall-clock
 // limits. Worst-case browser attempts: BROWSER_RETRY_COUNT * (BROWSER_DEFAULT_TIMEOUT_MS
-// + BROWSER_RETRY_DELAY_MS * attempt). With the values below: 3 * (20s + up
-// to 3s backoff) ~= 69s, leaving headroom for IP-rotate fallback within the
-// CPU budget declared in wrangler.toml (cpu_ms = 300_000).
-const BROWSER_DEFAULT_TIMEOUT_MS: number = 20000;
+// + exponential backoff up to BROWSER_RETRY_MAX_DELAY_MS). With the values
+// below: 3 * (15s + up to 6s backoff) ~= 63s, leaving headroom for IP-rotate
+// fallback within the CPU budget declared in wrangler.toml (cpu_ms = 300_000).
+// Backoff is exponential (1s, 2s, 4s, capped) so a stalled upstream has more
+// time to recover than the previous linear schedule (1s, 2s, 3s) granted.
+const BROWSER_DEFAULT_TIMEOUT_MS: number = 15000;
 const BROWSER_WAIT_UNTIL: WaitUntilState = 'domcontentloaded';
 const BROWSER_RETRY_COUNT: number = 3;
-const BROWSER_RETRY_DELAY_MS: number = 1000;
+const BROWSER_RETRY_BASE_DELAY_MS: number = 1000;
+const BROWSER_RETRY_MAX_DELAY_MS: number = 6000;
+const BROWSER_RETRY_BACKOFF_FACTOR: number = 2;
+const BROWSER_RETRY_FIRST_ATTEMPT: number = 1;
 
 // Load IP rotation config with module-level caching
 const getOrLoadIpRotateConfig = async (
@@ -168,6 +173,13 @@ const fetchPageOnce = async (
   }
 };
 
+const computeBrowserRetryDelay = (attempt: number): number =>
+  Math.min(
+    BROWSER_RETRY_BASE_DELAY_MS *
+      BROWSER_RETRY_BACKOFF_FACTOR ** (attempt - BROWSER_RETRY_FIRST_ATTEMPT),
+    BROWSER_RETRY_MAX_DELAY_MS,
+  );
+
 const fetchPageWithRetry = async (params: FetchPageWithRetryParams): Promise<FetchPageResponse> => {
   const { browserWorker, url, attempt, lastError } = params;
 
@@ -181,7 +193,7 @@ const fetchPageWithRetry = async (params: FetchPageWithRetryParams): Promise<Fet
     const errorMessage: string = getErrorMessage(error);
 
     if (attempt < BROWSER_RETRY_COUNT) {
-      await delay(BROWSER_RETRY_DELAY_MS * attempt);
+      await delay(computeBrowserRetryDelay(attempt));
     }
 
     return fetchPageWithRetry({
