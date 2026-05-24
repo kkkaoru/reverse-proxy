@@ -27,6 +27,7 @@ interface ValidatedParams {
 
 const QUERY_PARAM_URL = 'url';
 const QUERY_PARAM_USER_ID = 'user_id';
+const QUERY_PARAM_CACHE = 'cache';
 
 const getQueryParams = (c: Context<{ Bindings: WorkerBindings }>): PlaywrightQueryParams | null => {
   const encodedUrl: string | undefined = c.req.query(QUERY_PARAM_URL);
@@ -38,6 +39,9 @@ const getQueryParams = (c: Context<{ Bindings: WorkerBindings }>): PlaywrightQue
 
   return { url: decodeURIComponent(encodedUrl), userId: decodeURIComponent(encodedUserId) };
 };
+
+const shouldUseCache = (c: Context<{ Bindings: WorkerBindings }>): boolean =>
+  c.req.query(QUERY_PARAM_CACHE) !== '0';
 
 const validateParams = (c: Context<{ Bindings: WorkerBindings }>): ValidatedParams | Response => {
   const params: PlaywrightQueryParams | null = getQueryParams(c);
@@ -76,12 +80,15 @@ export const playwrightHandler = async (
     });
   }
 
-  const cachedData = await getCachedHtml(c.env.KV, {
-    url: paramsResult.url,
-    userId: paramsResult.userId,
-  });
-  if (cachedData) {
-    return htmlResponse(c, cachedData.html);
+  const useCache = shouldUseCache(c);
+  if (useCache) {
+    const cachedData = await getCachedHtml(c.env.KV, {
+      url: paramsResult.url,
+      userId: paramsResult.userId,
+    });
+    if (cachedData) {
+      return htmlResponse(c, cachedData.html);
+    }
   }
 
   const validation: ValidatedParams | Response = validateParams(c);
@@ -119,7 +126,9 @@ export const playwrightHandler = async (
     });
   }
 
-  await setCachedHtml(c.env.KV, { url: params.url, userId: params.userId }, result.html);
+  if (useCache) {
+    await setCachedHtml(c.env.KV, { url: params.url, userId: params.userId }, result.html);
+  }
   return htmlResponse(c, result.html);
 };
 

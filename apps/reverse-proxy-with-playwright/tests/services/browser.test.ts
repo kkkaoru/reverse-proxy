@@ -190,6 +190,31 @@ describe('fetchPage', () => {
     }
     expect(vi.mocked(launchBrowser).mock.calls.length).toBe(2);
   });
+
+  it('should reject Akamai block pages and retry', async () => {
+    const blockedPage = createMockPage('<html><head><TITLE>Access Denied</TITLE></head></html>');
+    const successPage = createMockPage('<html><body>Recovered content</body></html>');
+    const blockedContext = createMockContext(blockedPage);
+    const successContext = createMockContext(successPage);
+    const blockedBrowser = createMockBrowser(blockedContext);
+    const successBrowser = createMockBrowser(successContext);
+    vi.mocked(launchBrowser)
+      .mockResolvedValueOnce(blockedBrowser as unknown as Browser)
+      .mockResolvedValueOnce(successBrowser as unknown as Browser);
+
+    const result = await fetchPage({
+      browserWorker: {} as never,
+      url: 'https://example.com/page',
+    });
+
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.html).toBe('<html><body>Recovered content</body></html>');
+    }
+    expect(vi.mocked(launchBrowser).mock.calls.length).toBe(2);
+    expect(blockedContext.close).toHaveBeenCalled();
+    expect(blockedBrowser.close).toHaveBeenCalled();
+  });
 });
 
 describe('performSignIn', () => {
@@ -251,6 +276,28 @@ describe('performSignIn', () => {
     expect(browser.newContext).toHaveBeenCalledWith({
       storageState: existingStorageState,
     });
+  });
+
+  it('should keep sign-in successful when the post sign-in network idle wait times out', async () => {
+    const page = createMockPage('<html><body>Dashboard</body></html>');
+    page.waitForLoadState = vi.fn().mockRejectedValue(new Error('Timeout 30000ms exceeded'));
+    const context = createMockContext(page);
+    const browser = createMockBrowser(context);
+    vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
+
+    const result = await performSignIn({
+      browserWorker: {} as never,
+      signInUrl: 'https://example.com/login',
+      userIdSelector: '#email',
+      passwordSelector: '#password',
+      signInButtonSelector: '#submit',
+      userId: 'user@example.com',
+      password: 'secret123',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.storageState).toStrictEqual(createMockStorageState());
+    expect(result.errorMessage).toBeUndefined();
   });
 
   it('should handle sign-in failure', async () => {

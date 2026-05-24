@@ -204,7 +204,7 @@ describe('fetchPageWithSignIn', () => {
     vi.mocked(launchBrowser).mockReset();
   });
 
-  it('should fetch page and return html without validation config', async () => {
+  it('should fetch page and treat non-gated html as signed in', async () => {
     const { db } = createInMemoryD1Database();
     const kv = createMockKVNamespace();
     const page = createMockPage('<html>Content</html>');
@@ -222,7 +222,7 @@ describe('fetchPageWithSignIn', () => {
     });
 
     expect(result.html).toBe('<html>Content</html>');
-    expect(result.signedIn).toBe(false);
+    expect(result.signedIn).toBe(true);
   });
 
   it('should return signedIn true when validation passes', async () => {
@@ -303,20 +303,10 @@ describe('fetchPageWithSignIn', () => {
     expect(result.signedIn).toBe(true);
   });
 
-  it('should return error when sign-in flow fails', async () => {
-    const { db, insertRow } = createInMemoryD1Database();
-    const validationRow: InMemoryD1Row = {
-      id: 'val-1',
-      domain: 'example.com',
-      text_selector: '.greeting',
-      is_signed_in_regex_pattern: '^Welcome',
-      created_at: '2024-01-01T00:00:00.000Z',
-      updated_at: '2024-01-01T00:00:00.000Z',
-    };
-    insertRow('signed_in_validation_regex', validationRow);
-
+  it('should return error when sign-in flow fails on a gated page', async () => {
+    const { db } = createInMemoryD1Database();
     const kv = createMockKVNamespace();
-    const page = createMockPage('<html>Login Page</html>');
+    const page = createMockPage('<html><div class="Premium_Regist_Box">Login</div></html>');
     page.$ = vi.fn().mockResolvedValue(null);
     const context = createMockContext(page);
     const browser = createMockBrowser(context);
@@ -333,5 +323,108 @@ describe('fetchPageWithSignIn', () => {
 
     expect(result.signedIn).toBe(false);
     expect(result.errorMessage).toBe('Sign-in selector not found');
+  });
+});
+
+describe('fetchPageWithSignIn access gates', () => {
+  beforeEach(() => {
+    vi.mocked(launchBrowser).mockReset();
+  });
+
+  it('should sign in when the fetched page is an access gate even without validation config', async () => {
+    const { db, insertRow } = createInMemoryD1Database();
+    insertRow('sign_in_selectors', {
+      id: 'sel-1',
+      domain: 'example.com',
+      sign_in_url: 'https://example.com/login',
+      user_id_selector: '#email',
+      password_selector: '#password',
+      sign_in_button_selector: '#submit',
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const kv = createMockKVNamespace();
+    const gatePage = createMockPage('<div class="Premium_Regist_Box">会員登録</div>');
+    const signInPage = createMockPage('<html>Login</html>');
+    const contentPage = createMockPage('<table class="Paddock_Table"><tr><td>1</td></tr></table>');
+
+    vi.mocked(launchBrowser)
+      .mockResolvedValueOnce(createMockBrowser(createMockContext(gatePage)) as unknown as Browser)
+      .mockResolvedValueOnce(createMockBrowser(createMockContext(signInPage)) as unknown as Browser)
+      .mockResolvedValueOnce(
+        createMockBrowser(createMockContext(contentPage)) as unknown as Browser,
+      );
+
+    const result = await fetchPageWithSignIn({
+      browserWorker: {} as never,
+      db,
+      kv,
+      url: 'https://example.com/premium/page',
+      userId: 'user@example.com',
+      password: 'secret',
+    });
+
+    expect(result.html).toBe('<table class="Paddock_Table"><tr><td>1</td></tr></table>');
+    expect(result.signedIn).toBe(true);
+    expect(result.refreshedSession).toBe(true);
+    expect(signInPage.fill).toHaveBeenCalledWith('#email', 'user@example.com');
+    expect(signInPage.fill).toHaveBeenCalledWith('#password', 'secret');
+  });
+
+  it('should discard stale storage and retry sign-in when the first refetch is still gated', async () => {
+    const { db, insertRow } = createInMemoryD1Database();
+    insertRow('sign_in_selectors', {
+      id: 'sel-1',
+      domain: 'example.com',
+      sign_in_url: 'https://example.com/login',
+      user_id_selector: '#email',
+      password_selector: '#password',
+      sign_in_button_selector: '#submit',
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const kv = createMockKVNamespace();
+    await kv.put(
+      'storage-state::example.com::user@example.com',
+      JSON.stringify(createMockStorageState()),
+    );
+
+    const firstGatePage = createMockPage('<div class="Premium_Regist_Box">会員登録</div>');
+    const firstSignInPage = createMockPage('<html>Login</html>');
+    const secondGatePage = createMockPage('<div class="Premium_Regist_Box">会員登録</div>');
+    const freshSignInPage = createMockPage('<html>Login</html>');
+    const contentPage = createMockPage('<table class="Paddock_Table"><tr><td>1</td></tr></table>');
+
+    vi.mocked(launchBrowser)
+      .mockResolvedValueOnce(
+        createMockBrowser(createMockContext(firstGatePage)) as unknown as Browser,
+      )
+      .mockResolvedValueOnce(
+        createMockBrowser(createMockContext(firstSignInPage)) as unknown as Browser,
+      )
+      .mockResolvedValueOnce(
+        createMockBrowser(createMockContext(secondGatePage)) as unknown as Browser,
+      )
+      .mockResolvedValueOnce(
+        createMockBrowser(createMockContext(freshSignInPage)) as unknown as Browser,
+      )
+      .mockResolvedValueOnce(
+        createMockBrowser(createMockContext(contentPage)) as unknown as Browser,
+      );
+
+    const result = await fetchPageWithSignIn({
+      browserWorker: {} as never,
+      db,
+      kv,
+      url: 'https://example.com/premium/page',
+      userId: 'user@example.com',
+      password: 'secret',
+    });
+
+    expect(result.html).toBe('<table class="Paddock_Table"><tr><td>1</td></tr></table>');
+    expect(result.signedIn).toBe(true);
+    expect(kv.delete).toHaveBeenCalledWith('storage-state::example.com::user@example.com');
   });
 });

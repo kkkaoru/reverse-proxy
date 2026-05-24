@@ -109,6 +109,48 @@ describe('getCachedHtml', () => {
     });
   });
 
+  it('should delete and ignore cached Akamai block html', async () => {
+    const kv = createMockKVNamespace();
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+
+    await kv.put(
+      cacheKey,
+      JSON.stringify({
+        html: '<html><head><TITLE>Access Denied</TITLE></head></html>',
+        cachedAt: '2024-01-15T09:00:00.000Z',
+      }),
+    );
+
+    const result = await getCachedHtml(kv, {
+      url: 'https://example.com/page',
+      userId: 'user@example.com',
+    });
+
+    expect(result).toBeNull();
+    expect(await kv.get(cacheKey)).toBeNull();
+  });
+
+  it('should delete and ignore cached access gate html', async () => {
+    const kv = createMockKVNamespace();
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+
+    await kv.put(
+      cacheKey,
+      JSON.stringify({
+        html: '<html><body><div class="Premium_Regist_Box">会員登録</div></body></html>',
+        cachedAt: '2024-01-15T09:00:00.000Z',
+      }),
+    );
+
+    const result = await getCachedHtml(kv, {
+      url: 'https://example.com/page',
+      userId: 'user@example.com',
+    });
+
+    expect(result).toBeNull();
+    expect(await kv.get(cacheKey)).toBeNull();
+  });
+
   it('should return null when cached data is invalid JSON', async () => {
     const kv = createMockKVNamespace();
     const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
@@ -170,6 +212,38 @@ describe('setCachedHtml', () => {
     const data = JSON.parse(cached) as { html: string; cachedAt: string };
     expect(data.html).toBe('<html><body>New content</body></html>');
     expect(data.cachedAt).toBe('2024-01-15T10:00:00.000Z');
+  });
+
+  it('should not store Akamai block html', async () => {
+    const kv = createMockKVNamespace();
+
+    await setCachedHtml(
+      kv,
+      {
+        url: 'https://example.com/page',
+        userId: 'user@example.com',
+      },
+      '<html><head><TITLE>Access Denied</TITLE></head></html>',
+    );
+
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+    expect(await kv.get(cacheKey)).toBeNull();
+  });
+
+  it('should not store access gate html', async () => {
+    const kv = createMockKVNamespace();
+
+    await setCachedHtml(
+      kv,
+      {
+        url: 'https://example.com/page',
+        userId: 'user@example.com',
+      },
+      '<html><body><div class="Premium_Regist_Box">会員登録</div></body></html>',
+    );
+
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+    expect(await kv.get(cacheKey)).toBeNull();
   });
 
   it('should overwrite existing cache', async () => {

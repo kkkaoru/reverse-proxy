@@ -235,4 +235,51 @@ describe('playwrightHandler - caching', () => {
     expect(cachedData.html).toBe('<html>Fresh content</html>');
     vi.useRealTimers();
   });
+
+  it('should bypass KV cache when cache is disabled', async () => {
+    const { db, insertRow } = createInMemoryD1Database();
+    const kv = createMockKVNamespace();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
+
+    insertRow('sign_in_users', {
+      id: 'user-1',
+      domain: 'example.com',
+      user_id: 'user@example.com',
+      password_hash: 'hash',
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+    await kv.put(
+      cacheKey,
+      JSON.stringify({ html: '<html>Stale</html>', cachedAt: '2024-01-15T09:00:00.000Z' }),
+    );
+
+    const page = createMockPage('<html>Fresh content</html>');
+    const context = createMockContext(page);
+    const browser = createMockBrowser(context);
+    vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
+
+    const queryParams: Record<string, string> = {
+      cache: '0',
+      url: encodeURIComponent('https://example.com/page'),
+      user_id: encodeURIComponent('user@example.com'),
+    };
+    const mockContext = {
+      env: { DB: db, KV: kv, BROWSER: browser as unknown as Browser, PEPPER: 'test-pepper' },
+      req: {
+        query: vi.fn((key: string) => queryParams[key]),
+      },
+      html: vi.fn((html, status) => new Response(html, { status })),
+      json: vi.fn((data, status) => new Response(JSON.stringify(data), { status })),
+    } as unknown as Context<{ Bindings: WorkerBindings }>;
+
+    const response = await playwrightHandler(mockContext);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('<html>Fresh content</html>');
+    expect(await kv.get(cacheKey)).toContain('<html>Stale</html>');
+    vi.useRealTimers();
+  });
 });

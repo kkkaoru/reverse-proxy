@@ -2,6 +2,8 @@
 // Execute with bun: wrangler dev
 
 import { DATE_MONTH_OFFSET, DATE_PAD_CHAR, DATE_PAD_LENGTH } from '../constants/index.ts';
+import { isAkamaiBlockBody } from '../utils/akamai.ts';
+import { isAccessGateHtml } from '../utils/page-access.ts';
 
 interface CacheKeyParams {
   url: string;
@@ -53,6 +55,10 @@ export const getCachedHtml = async (
     if (!isCacheResponse(data)) {
       return null;
     }
+    if (isAkamaiBlockBody(data.html) || isAccessGateHtml(data.html)) {
+      await kv.delete(cacheKey);
+      return null;
+    }
 
     return data;
   } catch {
@@ -67,6 +73,10 @@ export const setCachedHtml = async (
 ): Promise<void> => {
   const dateKey: string = formatDateKey(new Date());
   const cacheKey: string = buildCacheKey(params, dateKey);
+  if (isAkamaiBlockBody(html) || isAccessGateHtml(html)) {
+    await kv.delete(cacheKey);
+    return;
+  }
 
   const cacheData: CacheResponse = {
     html,

@@ -1,10 +1,10 @@
 // Sign-in flow orchestration service
 // Execute with bun: wrangler dev
 
-import type { Browser, BrowserWorker } from '@cloudflare/playwright';
+import type { BrowserWorker } from '@cloudflare/playwright';
 import type { D1Database } from '@cloudflare/workers-types';
 import { findSignInSelectorByDomain } from '../repositories/sign-in-selectors.ts';
-import { findSignedInValidationByDomain } from '../repositories/signed-in-validation.ts';
+import { isAccessGateHtml } from '../utils/page-access.ts';
 import { buildStorageStateKey } from '../utils/storage-state.ts';
 import {
   deserializeStorageState,
@@ -12,8 +12,6 @@ import {
   performSignIn,
   serializeStorageState,
 } from './browser.ts';
-import { launchBrowser } from './browser-launcher.ts';
-import { checkSignedIn } from './validation.ts';
 
 interface SignInFlowParams {
   browserWorker: BrowserWorker;
@@ -22,6 +20,7 @@ interface SignInFlowParams {
   domain: string;
   userId: string;
   password: string;
+  forceFreshSession?: boolean;
 }
 
 interface SignInFlowResult {
@@ -42,6 +41,7 @@ interface FetchWithSignInResult {
   html: string;
   signedIn: boolean;
   errorMessage?: string;
+  refreshedSession?: boolean;
 }
 
 export const executeSignInFlow = async (params: SignInFlowParams): Promise<SignInFlowResult> => {
@@ -50,7 +50,8 @@ export const executeSignInFlow = async (params: SignInFlowParams): Promise<SignI
     return { success: false, errorMessage: 'Sign-in selector not found' };
   }
 
-  const existingStateJson = await params.kv.get(buildStorageStateKey(params.domain, params.userId));
+  const storageStateKey = buildStorageStateKey(params.domain, params.userId);
+  const existingStateJson = params.forceFreshSession ? null : await params.kv.get(storageStateKey);
   const existingState = existingStateJson ? deserializeStorageState(existingStateJson) : undefined;
 
   const signInResult = await performSignIn({
@@ -71,7 +72,6 @@ export const executeSignInFlow = async (params: SignInFlowParams): Promise<SignI
     };
   }
 
-  const storageStateKey = buildStorageStateKey(params.domain, params.userId);
   await params.kv.put(storageStateKey, serializeStorageState(signInResult.storageState));
 
   return { success: true };
@@ -113,7 +113,10 @@ const fetchInitialPage = async (
   return result;
 };
 
-const refetchAfterSignIn = async (ctx: FetchPageContext): Promise<FetchWithSignInResult> => {
+const refetchAfterSignIn = async (
+  ctx: FetchPageContext,
+  refreshedSession: boolean,
+): Promise<FetchWithSignInResult> => {
   const newStateJson = await ctx.params.kv.get(ctx.storageStateKey);
   const newState = newStateJson ? deserializeStorageState(newStateJson) : undefined;
 
@@ -131,7 +134,44 @@ const refetchAfterSignIn = async (ctx: FetchPageContext): Promise<FetchWithSignI
     ctx.storageStateKey,
     serializeStorageState(retriedPageResult.storageState),
   );
-  return { html: retriedPageResult.html, signedIn: true };
+  return {
+    html: retriedPageResult.html,
+    signedIn: !isAccessGateHtml(retriedPageResult.html),
+    refreshedSession,
+  };
+};
+
+const signInAndRefetch = async (
+  ctx: FetchPageContext,
+  forceFreshSession: boolean,
+): Promise<FetchWithSignInResult> => {
+  if (forceFreshSession) {
+    await ctx.params.kv.delete(ctx.storageStateKey);
+  }
+
+  const signInResult = await executeSignInFlow({
+    browserWorker: ctx.params.browserWorker,
+    db: ctx.params.db,
+    kv: ctx.params.kv,
+    domain: ctx.domain,
+    userId: ctx.params.userId,
+    password: ctx.params.password,
+    forceFreshSession,
+  });
+
+  if (!signInResult.success) {
+    return { html: '', signedIn: false, errorMessage: signInResult.errorMessage };
+  }
+
+  return refetchAfterSignIn(ctx, true);
+};
+
+const isSignedInFetchResult = (result: FetchWithSignInResult): boolean =>
+  !result.errorMessage && result.signedIn;
+
+const refreshSessionAndFetch = async (ctx: FetchPageContext): Promise<FetchWithSignInResult> => {
+  const retriedResult = await signInAndRefetch(ctx, false);
+  return isSignedInFetchResult(retriedResult) ? retriedResult : signInAndRefetch(ctx, true);
 };
 
 export const fetchPageWithSignIn = async (
@@ -148,40 +188,25 @@ export const fetchPageWithSignIn = async (
     return { html: '', signedIn: false, errorMessage: pageResult.errorMessage };
   }
 
-  const validation = await findSignedInValidationByDomain(params.db, domain);
-  if (!validation) {
-    await params.kv.put(storageStateKey, serializeStorageState(pageResult.storageState));
-    return { html: pageResult.html, signedIn: false };
+  if (isAccessGateHtml(pageResult.html)) {
+    return refreshSessionAndFetch(ctx);
   }
 
-  const validationBrowser: Browser = await launchBrowser(params.browserWorker);
-  const context = await validationBrowser.newContext({ storageState: pageResult.storageState });
-  const validationResult = await checkSignedIn({
-    context,
-    url: params.url,
-    textSelector: validation.textSelector,
-    isSignedInRegexPattern: validation.isSignedInRegexPattern,
-  });
-  await context.close();
-  await validationBrowser.close();
-
-  if (validationResult.isSignedIn) {
-    await params.kv.put(storageStateKey, serializeStorageState(pageResult.storageState));
-    return { html: pageResult.html, signedIn: true };
-  }
-
-  const signInResult = await executeSignInFlow({
-    browserWorker: params.browserWorker,
-    db: params.db,
-    kv: params.kv,
-    domain,
-    userId: params.userId,
-    password: params.password,
-  });
-
-  if (!signInResult.success) {
-    return { html: pageResult.html, signedIn: false, errorMessage: signInResult.errorMessage };
-  }
-
-  return refetchAfterSignIn(ctx);
+  // Treat the initial fetch as authoritative for sign-in state. The previous
+  // implementation ran a second checkSignedIn pass in a separate browser
+  // context, which caused two problems under load:
+  //   1. Concurrent requests for the same (domain, userId) each spawned a
+  //      validation browser that occasionally returned signed-out (Cloudflare
+  //      Browser Rendering allocates fresh contexts/egress per session and
+  //      netkeiba sometimes refused the cookie set), triggering needless
+  //      `refreshSessionAndFetch` calls that overwrote the KV storage state
+  //      with a newer sign-in. Three parallel requests racing through this
+  //      path produced "auth_required" responses for whichever request lost
+  //      the race.
+  //   2. Each validation call doubled the per-request Playwright budget.
+  // The hardened `isAccessGateHtml` already requires a positive marker
+  // (`Icon_Account`, `Comment_Table_Show_All`) on netkeiba pages, so the
+  // additional regex/selector pass adds no signal we trust more.
+  await params.kv.put(storageStateKey, serializeStorageState(pageResult.storageState));
+  return { html: pageResult.html, signedIn: true };
 };

@@ -10,6 +10,7 @@ import {
   FETCH_PAGE_RETRY_BASE_DELAY_MS,
   FETCH_PAGE_RETRY_COUNT,
 } from '../constants/index.ts';
+import { AKAMAI_BLOCK_PAGE_ERROR, isAkamaiBlockBody } from '../utils/akamai.ts';
 // Note: Playwright handles encoding automatically via browser engine
 import { launchBrowser } from './browser-launcher.ts';
 
@@ -115,6 +116,9 @@ const fetchPageOnce = async (
     if (html.length === 0) {
       throw new Error(EMPTY_PAGE_CONTENT_ERROR);
     }
+    if (isAkamaiBlockBody(html)) {
+      throw new Error(AKAMAI_BLOCK_PAGE_ERROR);
+    }
     const rawStorageState = await context.storageState();
     const storageState: StorageState = convertToStorageState(rawStorageState);
     return { html, storageState };
@@ -161,6 +165,14 @@ export const fetchPage = (params: FetchPageParams): Promise<FetchPageResult | Fe
     lastError: UNKNOWN_ERROR_PAGE_FETCH,
   });
 
+const waitForPostSignInNavigation = async (page: Page): Promise<void> => {
+  await page
+    .waitForLoadState(BROWSER_WAIT_UNTIL_NETWORKIDLE, {
+      timeout: BROWSER_DEFAULT_TIMEOUT_MS,
+    })
+    .catch(() => undefined);
+};
+
 export const performSignIn = async (params: SignInParams): Promise<SignInResult> => {
   const contextOptions: ContextOptions = buildContextOptions(params.storageState);
 
@@ -178,9 +190,7 @@ export const performSignIn = async (params: SignInParams): Promise<SignInResult>
     await page.fill(params.passwordSelector, params.password);
     await page.click(params.signInButtonSelector);
 
-    await page.waitForLoadState(BROWSER_WAIT_UNTIL_NETWORKIDLE, {
-      timeout: BROWSER_DEFAULT_TIMEOUT_MS,
-    });
+    await waitForPostSignInNavigation(page);
 
     const rawState = await context.storageState();
     const storageState: StorageState = convertToStorageState(rawState);
