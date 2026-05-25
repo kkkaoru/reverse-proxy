@@ -36,6 +36,32 @@ describe('extractDomain', () => {
     const domain: string = extractDomain('not-a-url');
     expect(domain).toBe('');
   });
+
+  it('should canonicalize race.netkeiba.com to itself', () => {
+    expect(extractDomain('https://race.netkeiba.com/race/data_top.html?race_id=1')).toBe(
+      'race.netkeiba.com',
+    );
+  });
+
+  it('should canonicalize nar.netkeiba.com to race.netkeiba.com so storage state is shared', () => {
+    expect(extractDomain('https://nar.netkeiba.com/race/data_top.html?race_id=1')).toBe(
+      'race.netkeiba.com',
+    );
+  });
+
+  it('should canonicalize the bare netkeiba.com hostname to race.netkeiba.com', () => {
+    expect(extractDomain('https://netkeiba.com/login')).toBe('race.netkeiba.com');
+  });
+
+  it('should canonicalize other netkeiba subdomains to race.netkeiba.com', () => {
+    expect(extractDomain('https://regist.netkeiba.com/account/login.html')).toBe(
+      'race.netkeiba.com',
+    );
+  });
+
+  it('should not canonicalize unrelated hosts that contain netkeiba in the path', () => {
+    expect(extractDomain('https://example.com/netkeiba.com/race')).toBe('example.com');
+  });
 });
 
 describe('isValidUrl', () => {
