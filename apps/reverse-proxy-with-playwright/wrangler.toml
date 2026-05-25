@@ -22,3 +22,4 @@ id = "${KV_NAMESPACE_ID}"
 
 [observability.logs]
 enabled = true
+head_sampling_rate = 0.1

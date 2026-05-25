@@ -55,5 +55,5 @@ subrequests = 10_000_000
 
 [observability.logs]
 enabled = true
-head_sampling_rate = 1
+head_sampling_rate = 0.1
 invocation_logs = true
