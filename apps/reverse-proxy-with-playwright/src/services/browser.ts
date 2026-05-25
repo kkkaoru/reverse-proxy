@@ -90,8 +90,32 @@ const UNKNOWN_ERROR_SIGN_IN = 'Unknown error during sign-in';
 const isStorageState = (data: RawStorageState): data is StorageState =>
   Array.isArray(data.cookies) && Array.isArray(data.origins);
 
+// netkeiba sometimes sets session cookies host-only on `race.netkeiba.com`
+// (no Domain attribute). Without rewriting, a JRA sign-in never
+// authenticates `nar.netkeiba.com` even though both share the same
+// account. Broadening any `*.netkeiba.com` host-only cookie to the
+// parent `.netkeiba.com` makes the storage state reusable across
+// subdomains; safe because the browser only accepts the broadening
+// when the saving host is itself under that scope.
+const NETKEIBA_COOKIE_HOST_SUFFIX = '.netkeiba.com';
+const NETKEIBA_COOKIE_DOMAIN = '.netkeiba.com';
+
+const normalizeNetkeibaCookieDomain = (cookie: CookieData): CookieData => {
+  const hostname = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+  if (hostname !== 'netkeiba.com' && !hostname.endsWith(NETKEIBA_COOKIE_HOST_SUFFIX)) {
+    return cookie;
+  }
+  if (cookie.domain === NETKEIBA_COOKIE_DOMAIN) {
+    return cookie;
+  }
+  return { ...cookie, domain: NETKEIBA_COOKIE_DOMAIN };
+};
+
+const broadenStorageStateCookies = (cookies: CookieData[]): CookieData[] =>
+  cookies.map(normalizeNetkeibaCookieDomain);
+
 const convertToStorageState = (rawState: RawStorageState): StorageState => ({
-  cookies: Array.isArray(rawState.cookies) ? rawState.cookies : [],
+  cookies: Array.isArray(rawState.cookies) ? broadenStorageStateCookies(rawState.cookies) : [],
   origins: Array.isArray(rawState.origins) ? rawState.origins : [],
 });
 
@@ -213,5 +237,10 @@ export const serializeStorageState = (state: StorageState): string => JSON.strin
 
 export const deserializeStorageState = (json: string): StorageState => {
   const parsed: RawStorageState = JSON.parse(json);
-  return isStorageState(parsed) ? parsed : { cookies: [], origins: [] };
+  if (!isStorageState(parsed)) {
+    return { cookies: [], origins: [] };
+  }
+  // Also broaden on read so legacy KV entries (saved before this
+  // normalization existed) authenticate sibling subdomains immediately.
+  return { cookies: broadenStorageStateCookies(parsed.cookies), origins: parsed.origins };
 };

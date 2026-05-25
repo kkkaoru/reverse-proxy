@@ -373,4 +373,84 @@ describe('deserializeStorageState', () => {
     const result = deserializeStorageState(json);
     expect(result).toStrictEqual({ cookies: [], origins: [] });
   });
+
+  it('should broaden host-only netkeiba subdomain cookies to the parent domain', () => {
+    const json = JSON.stringify({
+      cookies: [
+        {
+          name: 'session',
+          value: 'abc',
+          domain: 'race.netkeiba.com',
+          path: '/',
+          expires: 1704067200,
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax',
+        },
+      ],
+      origins: [],
+    });
+    const result = deserializeStorageState(json);
+    expect(result.cookies[0]?.domain).toBe('.netkeiba.com');
+  });
+
+  it('should broaden host-only nar.netkeiba.com cookies to the parent domain', () => {
+    const json = JSON.stringify({
+      cookies: [
+        {
+          name: 'session',
+          value: 'abc',
+          domain: 'nar.netkeiba.com',
+          path: '/',
+          expires: 1704067200,
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax',
+        },
+      ],
+      origins: [],
+    });
+    const result = deserializeStorageState(json);
+    expect(result.cookies[0]?.domain).toBe('.netkeiba.com');
+  });
+
+  it('should keep cookies that are already on the parent .netkeiba.com domain unchanged', () => {
+    const json = JSON.stringify({
+      cookies: [
+        {
+          name: 'session',
+          value: 'abc',
+          domain: '.netkeiba.com',
+          path: '/',
+          expires: 1704067200,
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax',
+        },
+      ],
+      origins: [],
+    });
+    const result = deserializeStorageState(json);
+    expect(result.cookies[0]?.domain).toBe('.netkeiba.com');
+  });
+
+  it('should leave unrelated host cookies unchanged', () => {
+    const json = JSON.stringify({
+      cookies: [
+        {
+          name: 'session',
+          value: 'abc',
+          domain: 'example.com',
+          path: '/',
+          expires: 1704067200,
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax',
+        },
+      ],
+      origins: [],
+    });
+    const result = deserializeStorageState(json);
+    expect(result.cookies[0]?.domain).toBe('example.com');
+  });
 });
