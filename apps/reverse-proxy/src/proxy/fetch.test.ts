@@ -335,10 +335,11 @@ describe('storeKvCacheDeferred', () => {
     // No error thrown
   });
 
-  it('calls waitUntil when executionCtx is provided', () => {
+  it('calls waitUntil when executionCtx is provided', async () => {
     const mockWaitUntil: ReturnType<typeof vi.fn> = vi.fn();
     const mockKv = {
       get: vi.fn(),
+      getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null }),
       put: vi.fn().mockResolvedValue(undefined),
       delete: vi.fn(),
       list: vi.fn(),
@@ -364,11 +365,16 @@ describe('storeKvCacheDeferred', () => {
     };
     storeKvCacheDeferred(params, converted);
     expect(mockWaitUntil).toHaveBeenCalledTimes(1);
+    // Await the deferred promise handed to waitUntil so it settles within this
+    // test rather than leaking into a later test as an unhandled rejection.
+    await mockWaitUntil.mock.calls[0]?.[0];
+    expect(mockKv.put).toHaveBeenCalledTimes(1);
   });
 
   it('fires and forgets when executionCtx is not provided but kv is', () => {
     const mockKv = {
       get: vi.fn(),
+      getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null }),
       put: vi.fn().mockResolvedValue(undefined),
       delete: vi.fn(),
       list: vi.fn(),

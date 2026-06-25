@@ -54,6 +54,16 @@ export interface SetKvCacheParams {
   data: CachedContent;
 }
 
+// KV metadata persisted alongside the cached value so a subsequent write can
+// detect byte-identical content and skip the redundant `put`.
+export interface KvCacheMetadata {
+  hash: string;
+}
+
+export interface SetKvCacheResult {
+  written: boolean;
+}
+
 export interface ParsedUrlSuccess {
   success: true;
   value: URL;

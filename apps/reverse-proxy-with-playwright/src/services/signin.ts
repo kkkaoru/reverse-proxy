@@ -28,6 +28,25 @@ interface SignInFlowResult {
   errorMessage?: string;
 }
 
+interface PutStorageStateParams {
+  kv: KVNamespace;
+  key: string;
+  newSerialized: string;
+  existing: string | null;
+}
+
+// Skip the KV write when the serialized storage state is byte-identical to what
+// is already stored. KV writes cost ~$5/M, so avoiding a redundant put on the
+// common "session unchanged" path is a direct saving. Every call site has just
+// read the current stored value, so it is passed in via `existing` rather than
+// issuing another GET here.
+const putStorageStateIfChanged = async (params: PutStorageStateParams): Promise<void> => {
+  if (params.existing === params.newSerialized) {
+    return;
+  }
+  await params.kv.put(params.key, params.newSerialized);
+};
+
 interface FetchWithSignInParams {
   browserWorker: BrowserWorker;
   db: D1Database;
@@ -72,7 +91,12 @@ export const executeSignInFlow = async (params: SignInFlowParams): Promise<SignI
     };
   }
 
-  await params.kv.put(storageStateKey, serializeStorageState(signInResult.storageState));
+  await putStorageStateIfChanged({
+    kv: params.kv,
+    key: storageStateKey,
+    newSerialized: serializeStorageState(signInResult.storageState),
+    existing: existingStateJson,
+  });
 
   return { success: true };
 };
@@ -86,6 +110,7 @@ interface FetchPageContext {
 interface FetchInitialPageResult {
   html: string;
   storageState: ReturnType<typeof deserializeStorageState>;
+  existingStateJson: string | null;
   error?: false;
 }
 
@@ -110,7 +135,7 @@ const fetchInitialPage = async (
     return { error: true, errorMessage: result.errorMessage };
   }
 
-  return result;
+  return { html: result.html, storageState: result.storageState, existingStateJson };
 };
 
 const refetchAfterSignIn = async (
@@ -130,10 +155,12 @@ const refetchAfterSignIn = async (
     return { html: '', signedIn: false, errorMessage: retriedPageResult.errorMessage };
   }
 
-  await ctx.params.kv.put(
-    ctx.storageStateKey,
-    serializeStorageState(retriedPageResult.storageState),
-  );
+  await putStorageStateIfChanged({
+    kv: ctx.params.kv,
+    key: ctx.storageStateKey,
+    newSerialized: serializeStorageState(retriedPageResult.storageState),
+    existing: newStateJson,
+  });
   return {
     html: retriedPageResult.html,
     signedIn: !isAccessGateHtml(retriedPageResult.html),
@@ -207,6 +234,11 @@ export const fetchPageWithSignIn = async (
   // The hardened `isAccessGateHtml` already requires a positive marker
   // (`Icon_Account`, `Comment_Table_Show_All`) on netkeiba pages, so the
   // additional regex/selector pass adds no signal we trust more.
-  await params.kv.put(storageStateKey, serializeStorageState(pageResult.storageState));
+  await putStorageStateIfChanged({
+    kv: params.kv,
+    key: storageStateKey,
+    newSerialized: serializeStorageState(pageResult.storageState),
+    existing: pageResult.existingStateJson,
+  });
   return { html: pageResult.html, signedIn: true };
 };

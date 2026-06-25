@@ -90,6 +90,7 @@ export const LOG_EVENT_UPSTREAM_ERROR: string = 'upstream-error';
 export const LOG_EVENT_KV_CACHE_HIT: string = 'kv-cache-hit';
 export const LOG_EVENT_KV_CACHE_MISS: string = 'kv-cache-miss';
 export const LOG_EVENT_KV_CACHE_SET: string = 'kv-cache-set';
+export const LOG_EVENT_KV_CACHE_SKIP: string = 'kv-cache-skip-unchanged';
 export const LOG_EVENT_IP_ROTATE: string = 'ip-rotate';
 
 // Cache settings

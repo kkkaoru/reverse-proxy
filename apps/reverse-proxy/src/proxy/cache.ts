@@ -9,14 +9,18 @@ import {
   LOG_EVENT_KV_CACHE_HIT,
   LOG_EVENT_KV_CACHE_MISS,
   LOG_EVENT_KV_CACHE_SET,
+  LOG_EVENT_KV_CACHE_SKIP,
   STATUS_OK,
 } from './constants.ts';
+import { computeContentHash } from './content-hash.ts';
 import type {
   CachedContent,
   FetchAndCacheParams,
+  KvCacheMetadata,
   LogEventDetail,
   ProxyCacheOptions,
   SetKvCacheParams,
+  SetKvCacheResult,
 } from './types.ts';
 
 interface HasHeaders {
@@ -59,10 +63,24 @@ export const getKvCachedContent = async (
   return cached ? parseKvCachedContent(cached) : null;
 };
 
-export const setKvCachedContent = (params: SetKvCacheParams): Promise<void> =>
-  params.kv.put(params.cacheKey, JSON.stringify(params.data), {
+// Skip the KV `put` when the new content hash matches the stored metadata hash.
+// Hash `data.content` (the large payload) rather than the whole serialized
+// value, since contentType is effectively constant per URL.
+export const setKvCachedContent = async (params: SetKvCacheParams): Promise<SetKvCacheResult> => {
+  const hash: string = await computeContentHash(params.data.content);
+  const existing: KVNamespaceGetWithMetadataResult<string, KvCacheMetadata> =
+    await params.kv.getWithMetadata<KvCacheMetadata>(params.cacheKey);
+
+  if (existing.metadata?.hash === hash) {
+    return { written: false };
+  }
+
+  await params.kv.put(params.cacheKey, JSON.stringify(params.data), {
     expirationTtl: CACHE_TTL_SECONDS,
+    metadata: { hash },
   });
+  return { written: true };
+};
 
 // Response header sanitization (accepts Response or Utf8TextResult)
 export const sanitizeResponseHeaders = (source: HasHeaders): Headers => {
@@ -92,13 +110,13 @@ export const storeKvCacheFromText = async (
     return;
   }
 
-  await setKvCachedContent({
+  const result: SetKvCacheResult = await setKvCachedContent({
     kv: params.options.kv,
     cacheKey: params.kvCacheKey,
     data: { content, contentType },
   });
 
-  logEvent(params.options, LOG_EVENT_KV_CACHE_SET, {
+  logEvent(params.options, result.written ? LOG_EVENT_KV_CACHE_SET : LOG_EVENT_KV_CACHE_SKIP, {
     target: params.target.toString(),
     cacheKey: params.kvCacheKey,
   });

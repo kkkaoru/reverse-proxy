@@ -430,21 +430,34 @@ export const createInMemoryD1Database = (): {
   return { db, insertRow, getRows, clearTable };
 };
 
+interface KVPutOptions {
+  metadata?: unknown;
+}
+
 export const createMockKVNamespace = (): KVNamespace => {
   const store: Map<string, string> = new Map();
+  const metadataStore: Map<string, unknown> = new Map();
 
   return {
     get: vi.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
-    put: vi.fn((key: string, value: string) => {
+    put: vi.fn((key: string, value: string, options?: KVPutOptions) => {
       store.set(key, value);
+      metadataStore.set(key, options?.metadata ?? null);
       return Promise.resolve();
     }),
     delete: vi.fn((key: string) => {
       store.delete(key);
+      metadataStore.delete(key);
       return Promise.resolve();
     }),
     list: vi.fn().mockResolvedValue({ keys: [], list_complete: true, cacheStatus: null }),
-    getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null, cacheStatus: null }),
+    getWithMetadata: vi.fn((key: string) =>
+      Promise.resolve({
+        value: store.get(key) ?? null,
+        metadata: metadataStore.get(key) ?? null,
+        cacheStatus: null,
+      }),
+    ),
   } as unknown as KVNamespace;
 };
 

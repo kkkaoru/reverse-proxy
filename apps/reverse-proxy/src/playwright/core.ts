@@ -9,6 +9,7 @@ import {
 } from '../ip-rotate/client.ts';
 import { fetchWithRetry } from '../ip-rotate/fetch.ts';
 import type { FetchRetryResult, IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
+import { computeContentHash } from '../proxy/content-hash.ts';
 import { isAkamaiBlockBody } from '../proxy/fetch/akamai.ts';
 
 export { isAkamaiBlockBody };
@@ -47,6 +48,16 @@ interface SetCachedContentParams {
   kv: KVNamespace;
   cacheKey: string;
   data: CachedContent;
+}
+
+// KV metadata persisted with the cached value so a later write can detect
+// byte-identical content and skip the redundant `put`.
+interface CacheMetadata {
+  hash: string;
+}
+
+export interface SetCachedContentResult {
+  written: boolean;
 }
 
 export interface LogEventDetail {
@@ -330,8 +341,25 @@ export const getCachedContent = async (
   return parseCachedContent(cached);
 };
 
-export const setCachedContent = (params: SetCachedContentParams): Promise<void> =>
-  params.kv.put(params.cacheKey, JSON.stringify(params.data), { expirationTtl: CACHE_TTL_SECONDS });
+// Skip the KV `put` when the new content hash matches the stored metadata hash.
+// Hash `data.content` (the large payload); contentType is effectively constant per URL.
+export const setCachedContent = async (
+  params: SetCachedContentParams,
+): Promise<SetCachedContentResult> => {
+  const hash: string = await computeContentHash(params.data.content);
+  const existing: KVNamespaceGetWithMetadataResult<string, CacheMetadata> =
+    await params.kv.getWithMetadata<CacheMetadata>(params.cacheKey);
+
+  if (existing.metadata?.hash === hash) {
+    return { written: false };
+  }
+
+  await params.kv.put(params.cacheKey, JSON.stringify(params.data), {
+    expirationTtl: CACHE_TTL_SECONDS,
+    metadata: { hash },
+  });
+  return { written: true };
+};
 
 export const isValidUrl = (url: string): boolean => {
   try {
@@ -397,8 +425,15 @@ export const handleFetchSuccess = async (params: HandleFetchSuccessParams): Prom
   }
 
   if (shouldCacheContent({ env, status, disableKv, content }) && env.KV) {
-    await setCachedContent({ kv: env.KV, cacheKey, data: { content, contentType } });
-    logEvent(env, 'cache-set', { target: targetUrl, cacheKey });
+    const result: SetCachedContentResult = await setCachedContent({
+      kv: env.KV,
+      cacheKey,
+      data: { content, contentType },
+    });
+    logEvent(env, result.written ? 'cache-set' : 'cache-skip-unchanged', {
+      target: targetUrl,
+      cacheKey,
+    });
   }
 
   if (!disableKv && shouldLogCacheSkip(env, status)) {

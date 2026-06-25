@@ -199,6 +199,91 @@ describe('executeSignInFlow', () => {
   });
 });
 
+describe('executeSignInFlow KV write deduplication', () => {
+  beforeEach(() => {
+    vi.mocked(launchBrowser).mockReset();
+  });
+
+  it('should skip the KV write when the storage state is unchanged', async () => {
+    const { db, insertRow } = createInMemoryD1Database();
+    insertRow('sign_in_selectors', {
+      id: 'sel-1',
+      domain: 'example.com',
+      sign_in_url: 'https://example.com/login',
+      user_id_selector: '#email',
+      password_selector: '#password',
+      sign_in_button_selector: '#submit',
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const kv = createMockKVNamespace();
+    // Seed KV with the exact serialized state the mock context will return.
+    await kv.put(
+      'storage-state::example.com::user@example.com',
+      JSON.stringify(createMockStorageState()),
+    );
+    const putCallsBefore = vi.mocked(kv.put).mock.calls.length;
+
+    const page = createMockPage('<html>Dashboard</html>');
+    const context = createMockContext(page);
+    const browser = createMockBrowser(context);
+    vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
+
+    const result = await executeSignInFlow({
+      browserWorker: {} as never,
+      db,
+      kv,
+      domain: 'example.com',
+      userId: 'user@example.com',
+      password: 'secret',
+    });
+
+    expect(result).toStrictEqual({ success: true });
+    expect(vi.mocked(kv.put).mock.calls.length).toBe(putCallsBefore);
+  });
+
+  it('should write the KV value when the stored storage state differs', async () => {
+    const { db, insertRow } = createInMemoryD1Database();
+    insertRow('sign_in_selectors', {
+      id: 'sel-1',
+      domain: 'example.com',
+      sign_in_url: 'https://example.com/login',
+      user_id_selector: '#email',
+      password_selector: '#password',
+      sign_in_button_selector: '#submit',
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const kv = createMockKVNamespace();
+    await kv.put(
+      'storage-state::example.com::user@example.com',
+      JSON.stringify({ cookies: [], origins: [] }),
+    );
+
+    const page = createMockPage('<html>Dashboard</html>');
+    const context = createMockContext(page);
+    const browser = createMockBrowser(context);
+    vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
+
+    const result = await executeSignInFlow({
+      browserWorker: {} as never,
+      db,
+      kv,
+      domain: 'example.com',
+      userId: 'user@example.com',
+      password: 'secret',
+    });
+
+    expect(result).toStrictEqual({ success: true });
+    expect(kv.put).toHaveBeenLastCalledWith(
+      'storage-state::example.com::user@example.com',
+      JSON.stringify(createMockStorageState()),
+    );
+  });
+});
+
 describe('fetchPageWithSignIn', () => {
   beforeEach(() => {
     vi.mocked(launchBrowser).mockReset();

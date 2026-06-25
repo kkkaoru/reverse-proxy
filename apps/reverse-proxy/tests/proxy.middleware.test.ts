@@ -16,6 +16,7 @@ const DEFAULT_ENV: ProxyCacheEnv = { CACHE_VERSION: 'v1' };
 
 interface MockKV {
   get: ReturnType<typeof vi.fn>;
+  getWithMetadata: ReturnType<typeof vi.fn>;
   put: ReturnType<typeof vi.fn>;
 }
 
@@ -23,6 +24,7 @@ type TestApp = Hono<{ Bindings: ProxyCacheEnv }>;
 
 const createMockKV = (): MockKV => ({
   get: vi.fn(),
+  getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null }),
   put: vi.fn(),
 });
 
@@ -171,10 +173,13 @@ describe('proxy middleware KV cache', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(content);
+    // The KV write is fire-and-forget and now awaits a content-hash + metadata
+    // lookup before `put`, so flush pending tasks before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(mockKV.put).toHaveBeenCalledWith(
       'proxy-v1::https://example.com/kv-miss',
       expect.any(String),
-      expect.objectContaining({ expirationTtl: 432000 }),
+      expect.objectContaining({ expirationTtl: 432000, metadata: { hash: expect.any(String) } }),
     );
   });
 

@@ -3,6 +3,7 @@
 
 import { DATE_MONTH_OFFSET, DATE_PAD_CHAR, DATE_PAD_LENGTH } from '../constants/index.ts';
 import { isAkamaiBlockBody } from '../utils/akamai.ts';
+import { computeContentHash } from '../utils/content-hash.ts';
 import { isAccessGateHtml } from '../utils/page-access.ts';
 
 interface CacheKeyParams {
@@ -19,6 +20,13 @@ interface RawCacheData {
   html?: unknown;
   cachedAt?: unknown;
 }
+
+interface CacheMetadata {
+  hash: string;
+}
+
+const hasMatchingHash = (metadata: unknown, hash: string): boolean =>
+  typeof metadata === 'object' && metadata !== null && (metadata as CacheMetadata).hash === hash;
 
 const formatDateKey = (date: Date): string => {
   const year: number = date.getUTCFullYear();
@@ -78,12 +86,18 @@ export const setCachedHtml = async (
     return;
   }
 
+  const hash: string = await computeContentHash(html);
+  const stored = await kv.getWithMetadata<CacheMetadata>(cacheKey);
+  if (hasMatchingHash(stored.metadata, hash)) {
+    return;
+  }
+
   const cacheData: CacheResponse = {
     html,
     cachedAt: new Date().toISOString(),
   };
 
-  await kv.put(cacheKey, JSON.stringify(cacheData));
+  await kv.put(cacheKey, JSON.stringify(cacheData), { metadata: { hash } });
 };
 
 export const deleteCachedHtml = async (

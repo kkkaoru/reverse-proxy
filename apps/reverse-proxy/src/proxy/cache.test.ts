@@ -29,6 +29,7 @@ import type {
 
 interface MockKv {
   get: ReturnType<typeof vi.fn>;
+  getWithMetadata: ReturnType<typeof vi.fn>;
   put: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   list: ReturnType<typeof vi.fn>;
@@ -42,6 +43,7 @@ interface MockListResult {
 
 const createMockKv = (): MockKv => ({
   get: vi.fn(),
+  getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null }),
   put: vi.fn(),
   delete: vi.fn(),
   list: vi.fn(),
@@ -147,8 +149,11 @@ test('getKvCachedContent returns null when cache miss', async () => {
 
 // --- setKvCachedContent ---
 
-test('setKvCachedContent puts JSON data with TTL', async () => {
+const HASH_OF_BODY: string = '230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5';
+
+test('setKvCachedContent puts JSON data with TTL and hash metadata when no stored hash', async () => {
   const mockKv: MockKv = createMockKv();
+  mockKv.getWithMetadata.mockResolvedValue({ value: null, metadata: null });
   mockKv.put.mockResolvedValue(undefined);
   const data: CachedContent = { content: 'body', contentType: 'text/html' };
 
@@ -158,13 +163,54 @@ test('setKvCachedContent puts JSON data with TTL', async () => {
     data,
   };
 
-  await setKvCachedContent(params);
+  const result = await setKvCachedContent(params);
 
+  expect(result).toStrictEqual({ written: true });
+  expect(mockKv.getWithMetadata).toHaveBeenCalledWith('set-key');
   expect(mockKv.put).toHaveBeenCalledWith(
     'set-key',
     JSON.stringify({ content: 'body', contentType: 'text/html' }),
-    { expirationTtl: 432000 },
+    { expirationTtl: 432000, metadata: { hash: HASH_OF_BODY } },
   );
+});
+
+test('setKvCachedContent puts when stored hash differs from new hash', async () => {
+  const mockKv: MockKv = createMockKv();
+  mockKv.getWithMetadata.mockResolvedValue({ value: 'old', metadata: { hash: 'different-hash' } });
+  mockKv.put.mockResolvedValue(undefined);
+  const data: CachedContent = { content: 'body', contentType: 'text/html' };
+
+  const params: SetKvCacheParams = {
+    kv: mockKv as unknown as KVNamespace,
+    cacheKey: 'set-key',
+    data,
+  };
+
+  const result = await setKvCachedContent(params);
+
+  expect(result).toStrictEqual({ written: true });
+  expect(mockKv.put).toHaveBeenCalledWith(
+    'set-key',
+    JSON.stringify({ content: 'body', contentType: 'text/html' }),
+    { expirationTtl: 432000, metadata: { hash: HASH_OF_BODY } },
+  );
+});
+
+test('setKvCachedContent skips put when stored hash matches new hash', async () => {
+  const mockKv: MockKv = createMockKv();
+  mockKv.getWithMetadata.mockResolvedValue({ value: 'old', metadata: { hash: HASH_OF_BODY } });
+  const data: CachedContent = { content: 'body', contentType: 'text/html' };
+
+  const params: SetKvCacheParams = {
+    kv: mockKv as unknown as KVNamespace,
+    cacheKey: 'set-key',
+    data,
+  };
+
+  const result = await setKvCachedContent(params);
+
+  expect(result).toStrictEqual({ written: false });
+  expect(mockKv.put).not.toHaveBeenCalled();
 });
 
 // --- sanitizeResponseHeaders ---
@@ -271,6 +317,7 @@ test('storeKvCacheFromText returns early when kv is undefined', async () => {
 
 test('storeKvCacheFromText stores text content in KV when kv is defined', async () => {
   const mockKv: MockKv = createMockKv();
+  mockKv.getWithMetadata.mockResolvedValue({ value: null, metadata: null });
   mockKv.put.mockResolvedValue(undefined);
   const options: ProxyCacheOptions = createMockOptions({
     kv: mockKv as unknown as KVNamespace,
@@ -290,10 +337,35 @@ test('storeKvCacheFromText stores text content in KV when kv is defined', async 
   expect(putArgs[0]).toBe('kv-store-key');
 });
 
-test('storeKvCacheFromText logs KV cache set event when logging enabled', async () => {
+test('storeKvCacheFromText skips put when stored hash matches content', async () => {
+  const mockKv: MockKv = createMockKv();
+  const hashOfStoredBody: string =
+    'f51f8212fa85691ac0feffff9ee86ed2c9aa162be7250072371fb73179227399';
+  mockKv.getWithMetadata.mockResolvedValue({
+    value: 'old',
+    metadata: { hash: hashOfStoredBody },
+  });
+  const options: ProxyCacheOptions = createMockOptions({
+    kv: mockKv as unknown as KVNamespace,
+    enableLogging: false,
+  });
+  const params: FetchAndCacheParams = {
+    cacheKey: 'ck',
+    kvCacheKey: 'kv-store-key',
+    target: new URL('https://example.com'),
+    options,
+  };
+
+  await storeKvCacheFromText(params, 'stored-body', 'text/plain');
+
+  expect(mockKv.put).not.toHaveBeenCalled();
+});
+
+test('storeKvCacheFromText logs KV cache set event when logging enabled and put happens', async () => {
   const consoleSpy: ReturnType<typeof vi.fn> = vi.fn();
   vi.stubGlobal('console', { log: consoleSpy });
   const mockKv: MockKv = createMockKv();
+  mockKv.getWithMetadata.mockResolvedValue({ value: null, metadata: null });
   mockKv.put.mockResolvedValue(undefined);
   const options: ProxyCacheOptions = createMockOptions({
     kv: mockKv as unknown as KVNamespace,
@@ -309,6 +381,32 @@ test('storeKvCacheFromText logs KV cache set event when logging enabled', async 
   await storeKvCacheFromText(params, 'body', 'text/html');
 
   expect(consoleSpy).toHaveBeenCalledWith('[reverse-proxy]', 'kv-cache-set', {
+    target: 'https://example.com/',
+    cacheKey: 'kv-log-key',
+  });
+});
+
+test('storeKvCacheFromText logs KV cache skip event when logging enabled and put is skipped', async () => {
+  const consoleSpy: ReturnType<typeof vi.fn> = vi.fn();
+  vi.stubGlobal('console', { log: consoleSpy });
+  const mockKv: MockKv = createMockKv();
+  const hashOfBody: string = '230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5';
+  mockKv.getWithMetadata.mockResolvedValue({ value: 'old', metadata: { hash: hashOfBody } });
+  const options: ProxyCacheOptions = createMockOptions({
+    kv: mockKv as unknown as KVNamespace,
+    enableLogging: true,
+  });
+  const params: FetchAndCacheParams = {
+    cacheKey: 'ck',
+    kvCacheKey: 'kv-log-key',
+    target: new URL('https://example.com'),
+    options,
+  };
+
+  await storeKvCacheFromText(params, 'body', 'text/html');
+
+  expect(mockKv.put).not.toHaveBeenCalled();
+  expect(consoleSpy).toHaveBeenCalledWith('[reverse-proxy]', 'kv-cache-skip-unchanged', {
     target: 'https://example.com/',
     cacheKey: 'kv-log-key',
   });

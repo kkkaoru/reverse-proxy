@@ -11,6 +11,8 @@ import {
 } from '../../src/services/cache.ts';
 import { createMockKVNamespace } from '../helpers.ts';
 
+const HEX_64_REGEX = /^[0-9a-f]{64}$/;
+
 describe('formatDateKeyForTest', () => {
   it('should format date as yyyy-mm-dd', () => {
     const date = new Date('2024-01-15T10:30:00.000Z');
@@ -273,6 +275,90 @@ describe('setCachedHtml', () => {
     });
 
     expect(result?.html).toBe('<html><body>Second content</body></html>');
+  });
+});
+
+describe('setCachedHtml KV write deduplication', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should store html with a content hash in metadata', async () => {
+    const kv = createMockKVNamespace();
+
+    await setCachedHtml(
+      kv,
+      {
+        url: 'https://example.com/page',
+        userId: 'user@example.com',
+      },
+      '<html><body>Hashed content</body></html>',
+    );
+
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+    const stored = await kv.getWithMetadata<{ hash: string }>(cacheKey);
+    expect(stored.metadata?.hash).toMatch(HEX_64_REGEX);
+  });
+
+  it('should skip the put when the html content hash is unchanged', async () => {
+    const kv = createMockKVNamespace();
+    const params = {
+      url: 'https://example.com/page',
+      userId: 'user@example.com',
+    };
+
+    await setCachedHtml(kv, params, '<html><body>Same content</body></html>');
+    expect(kv.put).toHaveBeenCalledTimes(1);
+
+    await setCachedHtml(kv, params, '<html><body>Same content</body></html>');
+    expect(kv.put).toHaveBeenCalledTimes(1);
+  });
+
+  it('should write again when the html content changes', async () => {
+    const kv = createMockKVNamespace();
+    const params = {
+      url: 'https://example.com/page',
+      userId: 'user@example.com',
+    };
+
+    await setCachedHtml(kv, params, '<html><body>First content</body></html>');
+    expect(kv.put).toHaveBeenCalledTimes(1);
+
+    await setCachedHtml(kv, params, '<html><body>Different content</body></html>');
+    expect(kv.put).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not skip when stored entry has no metadata hash', async () => {
+    const kv = createMockKVNamespace();
+    const cacheKey = 'html::https://example.com/page::user@example.com::2024-01-15';
+
+    // Simulate a legacy entry written without metadata.
+    await kv.put(
+      cacheKey,
+      JSON.stringify({
+        html: '<html><body>Legacy content</body></html>',
+        cachedAt: '2024-01-15T09:00:00.000Z',
+      }),
+    );
+    expect(kv.put).toHaveBeenCalledTimes(1);
+
+    await setCachedHtml(
+      kv,
+      {
+        url: 'https://example.com/page',
+        userId: 'user@example.com',
+      },
+      '<html><body>Legacy content</body></html>',
+    );
+
+    expect(kv.put).toHaveBeenCalledTimes(2);
+    const stored = await kv.getWithMetadata<{ hash: string }>(cacheKey);
+    expect(stored.metadata?.hash).toMatch(HEX_64_REGEX);
   });
 });
 

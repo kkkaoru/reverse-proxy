@@ -9,6 +9,7 @@ interface MockKV {
   list: MockInstance;
   delete: MockInstance;
   get: MockInstance;
+  getWithMetadata: MockInstance;
   put: MockInstance;
 }
 
@@ -16,6 +17,7 @@ const createMockKV = (): MockKV => ({
   list: vi.fn(),
   delete: vi.fn(),
   get: vi.fn(),
+  getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null }),
   put: vi.fn(),
 });
 

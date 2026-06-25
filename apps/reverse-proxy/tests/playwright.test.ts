@@ -55,12 +55,14 @@ import {
 
 interface MockKVNamespace {
   get: MockInstance;
+  getWithMetadata: MockInstance;
   put: MockInstance;
   delete: MockInstance;
 }
 
 const createMockKV = (): MockKVNamespace => ({
   get: vi.fn(),
+  getWithMetadata: vi.fn().mockResolvedValue({ value: null, metadata: null }),
   put: vi.fn(),
   delete: vi.fn(),
 });
@@ -250,21 +252,59 @@ describe('KV operations', () => {
     expect(result).toBeNull();
   });
 
-  it('setCachedContent stores with TTL', async () => {
+  it('setCachedContent stores with TTL and hash metadata when no stored hash', async () => {
     const mockKV = createMockKV();
+    mockKV.getWithMetadata.mockResolvedValue({ value: null, metadata: null });
     mockKV.put.mockResolvedValue(undefined);
 
-    await setCachedContent({
+    const result = await setCachedContent({
       kv: mockKV as unknown as KVNamespace,
       cacheKey: 'test-key',
       data: { content: 'html', contentType: 'text/html' },
     });
 
+    expect(result).toStrictEqual({ written: true });
+    expect(mockKV.getWithMetadata).toHaveBeenCalledWith('test-key');
     expect(mockKV.put).toHaveBeenCalledWith(
       'test-key',
       JSON.stringify({ content: 'html', contentType: 'text/html' }),
-      { expirationTtl: CACHE_TTL_SECONDS },
+      {
+        expirationTtl: CACHE_TTL_SECONDS,
+        metadata: { hash: 'e5e239560bc125a20ff2ac1fea50915bc198dd4f5b5256ec447a8a71e00132b3' },
+      },
     );
+  });
+
+  it('setCachedContent stores when stored hash differs from new hash', async () => {
+    const mockKV = createMockKV();
+    mockKV.getWithMetadata.mockResolvedValue({ value: 'old', metadata: { hash: 'stale-hash' } });
+    mockKV.put.mockResolvedValue(undefined);
+
+    const result = await setCachedContent({
+      kv: mockKV as unknown as KVNamespace,
+      cacheKey: 'test-key',
+      data: { content: 'html', contentType: 'text/html' },
+    });
+
+    expect(result).toStrictEqual({ written: true });
+    expect(mockKV.put).toHaveBeenCalledTimes(1);
+  });
+
+  it('setCachedContent skips put when stored hash matches new hash', async () => {
+    const mockKV = createMockKV();
+    mockKV.getWithMetadata.mockResolvedValue({
+      value: 'old',
+      metadata: { hash: 'e5e239560bc125a20ff2ac1fea50915bc198dd4f5b5256ec447a8a71e00132b3' },
+    });
+
+    const result = await setCachedContent({
+      kv: mockKV as unknown as KVNamespace,
+      cacheKey: 'test-key',
+      data: { content: 'html', contentType: 'text/html' },
+    });
+
+    expect(result).toStrictEqual({ written: false });
+    expect(mockKV.put).not.toHaveBeenCalled();
   });
 
   it('deleteKvCache returns false when KV is undefined', async () => {
@@ -479,6 +519,7 @@ describe('handleFetchError', () => {
 describe('handleFetchSuccess', () => {
   it('caches and returns response for successful fetch', async () => {
     const mockKV = createMockKV();
+    mockKV.getWithMetadata.mockResolvedValue({ value: null, metadata: null });
     mockKV.put.mockResolvedValue(undefined);
     const env = createMockEnv(mockKV);
 
@@ -495,6 +536,60 @@ describe('handleFetchSuccess', () => {
     expect(response.status).toBe(STATUS_OK);
     expect(response.headers.get('x-cache')).toBe(CACHE_MISS);
     expect(mockKV.put).toHaveBeenCalled();
+  });
+
+  it('skips KV put when stored hash matches content and still returns response', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const mockKV = createMockKV();
+    mockKV.getWithMetadata.mockResolvedValue({
+      value: 'old',
+      metadata: { hash: 'a815a9e10f510ff210a43f8d8cbd3fd22bbacdfe868803a32c4a26d4ba91657c' },
+    });
+    const env = createMockEnv(mockKV, 'TRUE');
+
+    const response = await handleFetchSuccess({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      content: '<html>content</html>',
+      contentType: CONTENT_TYPE_HTML,
+      status: 200,
+      disableKv: false,
+    });
+
+    expect(response.status).toBe(STATUS_OK);
+    expect(response.headers.get('x-cache')).toBe(CACHE_MISS);
+    expect(mockKV.put).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(LOG_PREFIX, 'cache-skip-unchanged', {
+      target: 'https://example.com',
+      cacheKey: 'test-key',
+    });
+    consoleSpy.mockRestore();
+  });
+
+  it('logs cache-set when put happens', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const mockKV = createMockKV();
+    mockKV.getWithMetadata.mockResolvedValue({ value: null, metadata: null });
+    mockKV.put.mockResolvedValue(undefined);
+    const env = createMockEnv(mockKV, 'TRUE');
+
+    await handleFetchSuccess({
+      env,
+      targetUrl: 'https://example.com',
+      cacheKey: 'test-key',
+      content: '<html>content</html>',
+      contentType: CONTENT_TYPE_HTML,
+      status: 200,
+      disableKv: false,
+    });
+
+    expect(mockKV.put).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(LOG_PREFIX, 'cache-set', {
+      target: 'https://example.com',
+      cacheKey: 'test-key',
+    });
+    consoleSpy.mockRestore();
   });
 
   it('does not cache when disableKv is true', async () => {
