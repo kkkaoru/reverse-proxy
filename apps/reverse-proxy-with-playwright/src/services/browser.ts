@@ -4,8 +4,8 @@
 import type { Browser, BrowserContext, BrowserWorker, Page } from '@cloudflare/playwright';
 import {
   BROWSER_DEFAULT_TIMEOUT_MS,
+  BROWSER_USER_AGENT,
   BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
-  BROWSER_WAIT_UNTIL_NETWORKIDLE,
   EMPTY_PAGE_CONTENT_ERROR,
   FETCH_PAGE_RETRY_BASE_DELAY_MS,
   FETCH_PAGE_RETRY_COUNT,
@@ -82,6 +82,7 @@ interface RawStorageState {
 
 interface ContextOptions {
   storageState?: StorageState;
+  userAgent?: string;
 }
 
 const UNKNOWN_ERROR_PAGE_FETCH = 'Unknown error during page fetch';
@@ -119,8 +120,60 @@ const convertToStorageState = (rawState: RawStorageState): StorageState => ({
   origins: Array.isArray(rawState.origins) ? rawState.origins : [],
 });
 
-const buildContextOptions = (storageState?: StorageState): ContextOptions =>
-  storageState ? { storageState } : {};
+const buildContextOptions = (storageState?: StorageState): ContextOptions => ({
+  userAgent: BROWSER_USER_AGENT,
+  ...(storageState ? { storageState } : {}),
+});
+
+const cookieAppliesToHostname = (cookie: CookieData, hostname: string): boolean => {
+  const cookieDomain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+  return hostname === cookieDomain || hostname.endsWith(`.${cookieDomain}`);
+};
+
+const cookieAppliesToPath = (cookiePath: string, urlPath: string): boolean => {
+  if (cookiePath === '/' || cookiePath === urlPath) {
+    return true;
+  }
+  if (!urlPath.startsWith(cookiePath)) {
+    return false;
+  }
+  return cookiePath.endsWith('/') || urlPath.charAt(cookiePath.length) === '/';
+};
+
+// Cloudflare Browser Rendering's Playwright integration restores
+// storageState cookies into its internal jar, but in practice the jar
+// doesn't always emit those cookies for cross-subdomain navigations
+// — a `.netkeiba.com` cookie loaded from a JRA sign-in is silently
+// dropped when navigating to `nar.netkeiba.com`, even though a plain
+// curl with the same cookies authenticates successfully. As a
+// belt-and-suspenders mitigation, project the storage state into a
+// `Cookie` header that Chromium sends verbatim via
+// `extraHTTPHeaders`, in addition to whatever the cookie jar adds.
+export const buildCookieHeaderForUrl = (cookies: CookieData[], url: string): string | null => {
+  const parsed = ((): URL | null => {
+    try {
+      return new URL(url);
+    } catch {
+      return null;
+    }
+  })();
+  if (!parsed) {
+    return null;
+  }
+  const isSecureRequest = parsed.protocol === 'https:';
+  const hostname = parsed.hostname;
+  const urlPath = parsed.pathname || '/';
+  const matching = cookies.filter(
+    (cookie) =>
+      cookieAppliesToHostname(cookie, hostname) &&
+      cookieAppliesToPath(cookie.path, urlPath) &&
+      (!cookie.secure || isSecureRequest),
+  );
+  if (matching.length === 0) {
+    return null;
+  }
+  return matching.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+};
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -130,6 +183,12 @@ const fetchPageOnce = async (
 ): Promise<FetchPageResult> => {
   const browser: Browser = await launchBrowser(params.browserWorker);
   const context: BrowserContext = await browser.newContext(contextOptions);
+  const cookieHeader = contextOptions.storageState
+    ? buildCookieHeaderForUrl(contextOptions.storageState.cookies, params.url)
+    : null;
+  if (cookieHeader) {
+    await context.setExtraHTTPHeaders({ Cookie: cookieHeader });
+  }
   const page: Page = await context.newPage();
   try {
     await page.goto(params.url, {
@@ -191,7 +250,7 @@ export const fetchPage = (params: FetchPageParams): Promise<FetchPageResult | Fe
 
 const waitForPostSignInNavigation = async (page: Page): Promise<void> => {
   await page
-    .waitForLoadState(BROWSER_WAIT_UNTIL_NETWORKIDLE, {
+    .waitForLoadState(BROWSER_WAIT_UNTIL_DOMCONTENTLOADED, {
       timeout: BROWSER_DEFAULT_TIMEOUT_MS,
     })
     .catch(() => undefined);

@@ -10,6 +10,7 @@ vi.mock('../../src/services/browser-launcher.ts', () => ({
 }));
 
 import {
+  buildCookieHeaderForUrl,
   deserializeStorageState,
   fetchPage,
   performSignIn,
@@ -54,6 +55,7 @@ interface MockPage {
 interface MockContext {
   newPage: ReturnType<typeof vi.fn>;
   storageState: ReturnType<typeof vi.fn>;
+  setExtraHTTPHeaders: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 }
 
@@ -94,6 +96,7 @@ const createMockPage = (html: string): MockPage => ({
 const createMockContext = (page: MockPage): MockContext => ({
   newPage: vi.fn().mockResolvedValue(page),
   storageState: vi.fn().mockResolvedValue(createMockStorageState()),
+  setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
   close: vi.fn().mockResolvedValue(undefined),
 });
 
@@ -123,7 +126,10 @@ describe('fetchPage', () => {
       expect(result.html).toBe('<html><body>Test content</body></html>');
       expect(result.storageState).toStrictEqual(createMockStorageState());
     }
-    expect(browser.newContext).toHaveBeenCalledWith({});
+    expect(browser.newContext).toHaveBeenCalledWith({
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    });
     expect(page.goto).toHaveBeenCalledWith('https://example.com/page', {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
@@ -150,6 +156,8 @@ describe('fetchPage', () => {
       expect(result.html).toBe('<html><body>Logged in content</body></html>');
     }
     expect(browser.newContext).toHaveBeenCalledWith({
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       storageState: existingStorageState,
     });
   });
@@ -248,7 +256,7 @@ describe('performSignIn', () => {
     expect(page.fill).toHaveBeenCalledWith('#email', 'user@example.com');
     expect(page.fill).toHaveBeenCalledWith('#password', 'secret123');
     expect(page.click).toHaveBeenCalledWith('#submit');
-    expect(page.waitForLoadState).toHaveBeenCalledWith('networkidle', {
+    expect(page.waitForLoadState).toHaveBeenCalledWith('domcontentloaded', {
       timeout: 30000,
     });
     expect(context.close).toHaveBeenCalled();
@@ -274,11 +282,13 @@ describe('performSignIn', () => {
     });
 
     expect(browser.newContext).toHaveBeenCalledWith({
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       storageState: existingStorageState,
     });
   });
 
-  it('should keep sign-in successful when the post sign-in network idle wait times out', async () => {
+  it('should keep sign-in successful when the post sign-in load state wait times out', async () => {
     const page = createMockPage('<html><body>Dashboard</body></html>');
     page.waitForLoadState = vi.fn().mockRejectedValue(new Error('Timeout 30000ms exceeded'));
     const context = createMockContext(page);
@@ -452,5 +462,66 @@ describe('deserializeStorageState', () => {
     });
     const result = deserializeStorageState(json);
     expect(result.cookies[0]?.domain).toBe('example.com');
+  });
+});
+
+describe('buildCookieHeaderForUrl', () => {
+  const cookies = [
+    {
+      name: 'nkauth',
+      value: 'auth-token',
+      domain: '.netkeiba.com',
+      path: '/',
+      expires: 1704067200,
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax' as const,
+    },
+    {
+      name: 'nkrace',
+      value: 'race-token',
+      domain: '.netkeiba.com',
+      path: '/',
+      expires: 1704067200,
+      httpOnly: false,
+      secure: false,
+      sameSite: 'Lax' as const,
+    },
+    {
+      name: 'other',
+      value: 'other-value',
+      domain: 'example.com',
+      path: '/',
+      expires: 1704067200,
+      httpOnly: false,
+      secure: false,
+      sameSite: 'Lax' as const,
+    },
+  ];
+
+  it('should include parent-domain cookies for the JRA subdomain', () => {
+    expect(buildCookieHeaderForUrl(cookies, 'https://race.netkeiba.com/race/data_top.html')).toBe(
+      'nkauth=auth-token; nkrace=race-token',
+    );
+  });
+
+  it('should include parent-domain cookies for the NAR subdomain', () => {
+    expect(buildCookieHeaderForUrl(cookies, 'https://nar.netkeiba.com/race/data_top.html')).toBe(
+      'nkauth=auth-token; nkrace=race-token',
+    );
+  });
+
+  it('should exclude secure cookies on an http request', () => {
+    expect(buildCookieHeaderForUrl(cookies, 'http://nar.netkeiba.com/race/data_top.html')).toBe(
+      'nkrace=race-token',
+    );
+  });
+
+  it('should exclude cookies whose domain does not match the host', () => {
+    expect(buildCookieHeaderForUrl(cookies, 'https://other.example.org/path')).toBeNull();
+  });
+
+  it('should return null when the url is invalid', () => {
+    expect(buildCookieHeaderForUrl(cookies, 'not a url')).toBeNull();
   });
 });
