@@ -4,6 +4,7 @@
 import type { BrowserWorker } from '@cloudflare/playwright';
 import type { D1Database } from '@cloudflare/workers-types';
 import { findSignInSelectorByDomain } from '../repositories/sign-in-selectors.ts';
+import { extractDomain } from '../utils/domain.ts';
 import { isAccessGateHtml } from '../utils/page-access.ts';
 import { buildStorageStateKey } from '../utils/storage-state.ts';
 import {
@@ -204,8 +205,7 @@ const refreshSessionAndFetch = async (ctx: FetchPageContext): Promise<FetchWithS
 export const fetchPageWithSignIn = async (
   params: FetchWithSignInParams,
 ): Promise<FetchWithSignInResult> => {
-  const url = new URL(params.url);
-  const domain = url.hostname;
+  const domain = extractDomain(params.url);
   const storageStateKey = buildStorageStateKey(domain, params.userId);
   const ctx: FetchPageContext = { params, domain, storageStateKey };
 

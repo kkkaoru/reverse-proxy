@@ -43,6 +43,7 @@ interface MockPage {
 interface MockContext {
   newPage: ReturnType<typeof vi.fn>;
   storageState: ReturnType<typeof vi.fn>;
+  setExtraHTTPHeaders: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 }
 
@@ -80,6 +81,7 @@ const createMockPage = (html: string): MockPage => ({
 const createMockContext = (page: MockPage): MockContext => ({
   newPage: vi.fn().mockResolvedValue(page),
   storageState: vi.fn().mockResolvedValue(createMockStorageState()),
+  setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
   close: vi.fn().mockResolvedValue(undefined),
 });
 
@@ -408,6 +410,36 @@ describe('fetchPageWithSignIn', () => {
 
     expect(result.signedIn).toBe(false);
     expect(result.errorMessage).toBe('Sign-in selector not found');
+  });
+});
+
+describe('fetchPageWithSignIn netkeiba domain sharing', () => {
+  beforeEach(() => {
+    vi.mocked(launchBrowser).mockReset();
+  });
+
+  it('should share race.netkeiba.com storage state for nar.netkeiba.com fetches', async () => {
+    const { db } = createInMemoryD1Database();
+    const kv = createMockKVNamespace();
+    const page = createMockPage('<html>Icon_Account</html>');
+    const context = createMockContext(page);
+    const browser = createMockBrowser(context);
+    vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
+
+    const result = await fetchPageWithSignIn({
+      browserWorker: {} as never,
+      db,
+      kv,
+      url: 'https://nar.netkeiba.com/race/data_top.html?race_id=202635070601',
+      userId: 'user@example.com',
+      password: 'secret',
+    });
+
+    expect(result.signedIn).toBe(true);
+    expect(kv.put).toHaveBeenCalledWith(
+      'storage-state::race.netkeiba.com::user@example.com',
+      expect.any(String),
+    );
   });
 });
 
