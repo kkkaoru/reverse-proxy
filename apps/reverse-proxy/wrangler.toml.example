@@ -1,7 +1,7 @@
 account_id = "${CLOUDFLARE_ACCOUNT_ID}"
 name = "reverse-proxy-queue"
 main = "src/index.ts"
-compatibility_date = "2025-10-09"
+compatibility_date = "2026-03-24"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
@@ -13,6 +13,9 @@ binding = "KV"
 id = "${CLOUDFLARE_KV_NAMESPACE_ID}"
 
 [vars]
+# Verified public HTML operations only. Unlisted/incompatible operations use Playwright.
+# Browser binding selects Kitesurf without an API token. Empty rules disable it.
+KITESURF_HTML_RULES = '{"https://example.com/":"Example Domain","https://nar.netkeiba.com/":"開催レース一覧","https://race.netkeiba.com/":{"text":"開催レース一覧","waitUntil":"networkidle2"},"https://db.netkeiba.com/":{"text":"みんなの競走馬ランキング","waitUntil":"networkidle2"},"https://nar.netkeiba.com/race/result.html?race_id=202635070601":{"text":["レーニス","アストラアヴィス","9,360円"],"waitUntil":"networkidle2"}}'
 API_DOMAIN = "${API_DOMAIN}"
 # Cache API control (optional, default: false)
 ENABLE_CACHE_API = "${ENABLE_CACHE_API}"
