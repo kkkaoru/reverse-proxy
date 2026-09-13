@@ -127,6 +127,8 @@ describe('fetchPage', () => {
       expect(result.storageState).toStrictEqual(createMockStorageState());
     }
     expect(browser.newContext).toHaveBeenCalledWith({
+      locale: 'ja-JP',
+      timezoneId: 'Asia/Tokyo',
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     });
@@ -156,6 +158,8 @@ describe('fetchPage', () => {
       expect(result.html).toBe('<html><body>Logged in content</body></html>');
     }
     expect(browser.newContext).toHaveBeenCalledWith({
+      locale: 'ja-JP',
+      timezoneId: 'Asia/Tokyo',
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       storageState: existingStorageState,
@@ -282,6 +286,8 @@ describe('performSignIn', () => {
     });
 
     expect(browser.newContext).toHaveBeenCalledWith({
+      locale: 'ja-JP',
+      timezoneId: 'Asia/Tokyo',
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       storageState: existingStorageState,

@@ -81,12 +81,16 @@ interface RawStorageState {
 }
 
 interface ContextOptions {
+  locale?: string;
   storageState?: StorageState;
+  timezoneId?: string;
   userAgent?: string;
 }
 
 const UNKNOWN_ERROR_PAGE_FETCH = 'Unknown error during page fetch';
 const UNKNOWN_ERROR_SIGN_IN = 'Unknown error during sign-in';
+const BROWSER_LOCALE = 'ja-JP';
+const BROWSER_TIMEZONE_ID = 'Asia/Tokyo';
 
 const isStorageState = (data: RawStorageState): data is StorageState =>
   Array.isArray(data.cookies) && Array.isArray(data.origins);
@@ -121,6 +125,8 @@ const convertToStorageState = (rawState: RawStorageState): StorageState => ({
 });
 
 const buildContextOptions = (storageState?: StorageState): ContextOptions => ({
+  locale: BROWSER_LOCALE,
+  timezoneId: BROWSER_TIMEZONE_ID,
   userAgent: BROWSER_USER_AGENT,
   ...(storageState ? { storageState } : {}),
 });
