@@ -1,4 +1,4 @@
-// Core logic for Playwright route - browser-independent
+// Execute with bun. Core logic for Playwright route - browser-independent
 // This module contains all caching, validation, and response handling logic
 // that can be tested without the @cloudflare/playwright dependency
 
@@ -11,6 +11,7 @@ import { fetchWithRetry } from '../ip-rotate/fetch.ts';
 import type { FetchRetryResult, IpRotateConfig, ParsedConfig } from '../ip-rotate/types.ts';
 import { computeContentHash } from '../proxy/content-hash.ts';
 import { isAkamaiBlockBody } from '../proxy/fetch/akamai.ts';
+import { isNavigationStub } from './navigation-stub.ts';
 
 export { isAkamaiBlockBody };
 
@@ -238,10 +239,13 @@ const isLikelyMojibakeContent = (text: string): boolean => {
 
 // Reasons that cause the IP-rotate path to bail out and let the caller fall
 // through to the browser-backed fetch path (or surface the failure).
-const ipRotateRejectReason = (content: string): 'empty' | 'akamai-block' | 'mojibake' | null => {
+const ipRotateRejectReason = (
+  content: string,
+): 'empty' | 'akamai-block' | 'mojibake' | 'redirect-stub' | null => {
   if (content.length === 0) return 'empty';
   if (isAkamaiBlockBody(content)) return 'akamai-block';
   if (isLikelyMojibakeContent(content)) return 'mojibake';
+  if (isNavigationStub(content)) return 'redirect-stub';
   return null;
 };
 
@@ -272,7 +276,7 @@ export const tryFetchWithIpRotate = async (
   logEvent(env, LOG_EVENT_IP_ROTATE, { target: targetUrl });
 
   const content: string = await response.text();
-  const reject: 'empty' | 'akamai-block' | 'mojibake' | null = ipRotateRejectReason(content);
+  const reject: ReturnType<typeof ipRotateRejectReason> = ipRotateRejectReason(content);
   if (reject !== null) {
     // biome-ignore lint/suspicious/noConsole: Intentional logging for wrangler tail observability
     console.log(LOG_PREFIX, `ip-rotate-${reject}`, { target: targetUrl });
