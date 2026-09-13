@@ -22,14 +22,16 @@ import {
   resolveIpRotateConfigForPlaywright,
   validateRequest,
 } from './core.ts';
+import type { KitesurfBinding, KitesurfEnv } from './kitesurf.ts';
+import { fetchHtmlWithKitesurfFallback } from './kitesurf.ts';
 
 // Re-export for backward compatibility
 export { PLAYWRIGHT_PATH } from './core.ts';
 export type { PlaywrightCoreEnv };
 
 // Interfaces
-export interface PlaywrightEnv extends PlaywrightCoreEnv {
-  BROWSER: BrowserWorker;
+export interface PlaywrightEnv extends PlaywrightCoreEnv, KitesurfEnv {
+  BROWSER: KitesurfBinding;
 }
 
 interface FetchPageWithRetryParams {
@@ -243,7 +245,12 @@ export const handlePlaywrightRequest = async (
     cacheKey,
     disableKv,
     disableCache,
-    fetchPage: () => fetchPageWithBrowser(env.BROWSER, targetUrl as string),
+    fetchPage: () =>
+      fetchHtmlWithKitesurfFallback({
+        env,
+        url: targetUrl as string,
+        fallback: () => fetchPageWithBrowser(env.BROWSER, targetUrl as string),
+      }),
     ipRotateOptions,
   });
 };
