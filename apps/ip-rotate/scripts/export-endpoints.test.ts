@@ -1,7 +1,7 @@
 // Export endpoints tests
 // Execute with bun: bun test
 
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import type {
   AccumulatorState,
   DescribeStacksResponse,
@@ -25,6 +25,8 @@ import {
   parseDescribeStacksOutput,
   parseStackName,
 } from './export-endpoints.ts';
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('isGatewayIndexSuffix', () => {
   test('should return true for gw1', () => {
@@ -551,6 +553,7 @@ describe('fetchAndCollectEndpoints', () => {
   });
 
   test('should collect endpoints from multiple stacks with different API keys', async () => {
+    vi.stubEnv('REGIONS', 'ap-northeast-1,ap-northeast-2');
     const mockStacksApNe1: string = JSON.stringify({
       Stacks: [
         {
