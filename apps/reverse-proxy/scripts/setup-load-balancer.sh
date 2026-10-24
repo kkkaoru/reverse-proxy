@@ -47,10 +47,34 @@ CF_API="https://api.cloudflare.com/client/v4"
 AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_LB}" -H "Content-Type: application/json")
 
 MONITOR_NAME="reverse-proxy-monitor"
+# Health-check cost: every probe is a billed Worker request. With the old
+# interval=60 from all regions each origin received ~1.06M probes/day.
+# One region every 300s is a few hundred probes/day per origin. NEAS (Northeast
+# Asia) is used because the callers and the netkeiba upstream are in Japan; the
+# workers.dev origins run in every colo, so there is no single "origin region".
+# Override with LB_CHECK_REGION / LB_MONITOR_INTERVAL in .dev.vars if needed.
+CHECK_REGION="${LB_CHECK_REGION:-NEAS}"
+MONITOR_INTERVAL="${LB_MONITOR_INTERVAL:-300}"
 POOL_NAME="reverse-proxy-workers-pool"
 LB_NAME="${API_DOMAIN}"
 
-echo "[1/4] Creating HTTPS monitor (${MONITOR_NAME})..."
+# Look up an existing object id by a field value (prints empty when absent).
+find_id() {
+  curl -sS "${AUTH[@]}" "$1" | jq -r --arg v "$3" ".result[] | select(.$2 == \$v) | .id" | head -1
+}
+
+# PATCH when the object exists (so reruns apply new settings), POST otherwise.
+upsert() {
+  local list_url="$1" field="$2" value="$3" payload="$4" id
+  id=$(find_id "$list_url" "$field" "$value")
+  if [ -n "$id" ]; then
+    curl -sS "${AUTH[@]}" -X PATCH "${list_url}/${id}" --data "$payload" | jq -r '.result.id // empty'
+  else
+    curl -sS "${AUTH[@]}" -X POST "$list_url" --data "$payload" | jq -r '.result.id // empty'
+  fi
+}
+
+echo "[1/4] Creating / updating HTTPS monitor (${MONITOR_NAME})..."
 MONITOR_PAYLOAD=$(cat <<EOF
 {
   "type": "https",
@@ -59,7 +83,7 @@ MONITOR_PAYLOAD=$(cat <<EOF
   "expected_codes": "2xx",
   "follow_redirects": false,
   "allow_insecure": false,
-  "interval": 60,
+  "interval": ${MONITOR_INTERVAL},
   "timeout": 10,
   "retries": 2,
   "description": "${MONITOR_NAME}",
@@ -70,28 +94,22 @@ MONITOR_PAYLOAD=$(cat <<EOF
 }
 EOF
 )
-MONITOR_ID=$(curl -sS "${AUTH[@]}" \
-  -X POST "${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/load_balancers/monitors" \
-  --data "$MONITOR_PAYLOAD" | jq -r '.result.id // empty')
-if [ -z "$MONITOR_ID" ]; then
-  echo "Monitor may already exist; listing and reusing by description..."
-  MONITOR_ID=$(curl -sS "${AUTH[@]}" \
-    "${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/load_balancers/monitors" \
-    | jq -r --arg d "$MONITOR_NAME" '.result[] | select(.description == $d) | .id' | head -1)
-fi
+MONITOR_ID=$(upsert "${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/load_balancers/monitors" \
+  description "$MONITOR_NAME" "$MONITOR_PAYLOAD")
 if [ -z "$MONITOR_ID" ]; then
   echo "Error: failed to create or locate monitor"
   exit 1
 fi
 echo "  Monitor ID: $MONITOR_ID"
 
-echo "[2/4] Creating pool (${POOL_NAME}) with two worker origins..."
+echo "[2/4] Creating / updating pool (${POOL_NAME}) with two worker origins..."
 POOL_PAYLOAD=$(cat <<EOF
 {
   "name": "${POOL_NAME}",
   "description": "Random between worker-a and worker-b (via workers.dev to avoid loopback)",
   "enabled": true,
   "monitor": "${MONITOR_ID}",
+  "check_regions": ["${CHECK_REGION}"],
   "origins": [
     {
       "name": "primary",
@@ -113,15 +131,8 @@ POOL_PAYLOAD=$(cat <<EOF
 }
 EOF
 )
-POOL_ID=$(curl -sS "${AUTH[@]}" \
-  -X POST "${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/load_balancers/pools" \
-  --data "$POOL_PAYLOAD" | jq -r '.result.id // empty')
-if [ -z "$POOL_ID" ]; then
-  echo "Pool may already exist; listing and reusing by name..."
-  POOL_ID=$(curl -sS "${AUTH[@]}" \
-    "${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/load_balancers/pools" \
-    | jq -r --arg n "$POOL_NAME" '.result[] | select(.name == $n) | .id' | head -1)
-fi
+POOL_ID=$(upsert "${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/load_balancers/pools" \
+  name "$POOL_NAME" "$POOL_PAYLOAD")
 if [ -z "$POOL_ID" ]; then
   echo "Error: failed to create or locate pool"
   exit 1
@@ -161,6 +172,7 @@ echo "[4/4] Done."
 echo "  API_DOMAIN        = ${API_DOMAIN}  (served by Cloudflare LB id=${LB_ID})"
 echo "  Primary origin    = ${PRIMARY_WORKER_DOMAIN}"
 echo "  Secondary origin  = ${SECONDARY_WORKER_DOMAIN}"
+echo "  Health checks     = every ${MONITOR_INTERVAL}s from ${CHECK_REGION}"
 echo
 echo "NOTE: Before the LB can own ${API_DOMAIN}, remove any existing Worker"
 echo "route/custom domain binding for ${API_DOMAIN} (it used to point directly"
