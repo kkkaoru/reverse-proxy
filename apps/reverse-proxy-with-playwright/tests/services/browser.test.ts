@@ -178,9 +178,9 @@ describe('fetchPage', () => {
     if ('error' in result) {
       expect(result.errorMessage).toBe('Browser not available');
     }
-    // fetchPage retries the failed launch up to FETCH_PAGE_RETRY_COUNT
-    // (= 4) times before surfacing the error.
-    expect(vi.mocked(launchBrowser).mock.calls.length).toBe(4);
+    // fetchPage makes FETCH_PAGE_RETRY_COUNT (= 2) attempts before surfacing
+    // the error.
+    expect(vi.mocked(launchBrowser).mock.calls.length).toBe(2);
   }, 20000);
 
   it('should retry then succeed when first launch fails', async () => {
