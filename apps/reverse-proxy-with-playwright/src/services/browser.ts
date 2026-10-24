@@ -183,37 +183,60 @@ export const buildCookieHeaderForUrl = (cookies: CookieData[], url: string): str
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Sessions are shared (see browser-launcher.ts), so a session that just
+// failed (Akamai block, timeout, empty page) must not be handed to the next
+// request. browser.close() only disconnects a connect()ed browser; ask
+// Chromium itself to exit. Best effort: an un-killed session still idles out
+// after keep_alive.
+const discardSession = async (browser: Browser): Promise<void> => {
+  try {
+    const cdp = await browser.newBrowserCDPSession();
+    await cdp.send('Browser.close');
+  } catch {
+    // Already gone or not supported: nothing more to do.
+  }
+};
+
 const fetchPageOnce = async (
   params: FetchPageParams,
   contextOptions: ContextOptions,
+  fresh: boolean,
 ): Promise<FetchPageResult> => {
-  const browser: Browser = await launchBrowser(params.browserWorker);
-  const context: BrowserContext = await browser.newContext(contextOptions);
-  const cookieHeader = contextOptions.storageState
-    ? buildCookieHeaderForUrl(contextOptions.storageState.cookies, params.url)
-    : null;
-  if (cookieHeader) {
-    await context.setExtraHTTPHeaders({ Cookie: cookieHeader });
-  }
-  const page: Page = await context.newPage();
+  const browser: Browser = await launchBrowser(params.browserWorker, { fresh });
+  let succeeded = false;
   try {
-    await page.goto(params.url, {
-      waitUntil: BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
-      timeout: BROWSER_DEFAULT_TIMEOUT_MS,
-    });
-    const html: string = await page.content();
-    if (html.length === 0) {
-      throw new Error(EMPTY_PAGE_CONTENT_ERROR);
+    const context: BrowserContext = await browser.newContext(contextOptions);
+    try {
+      const cookieHeader = contextOptions.storageState
+        ? buildCookieHeaderForUrl(contextOptions.storageState.cookies, params.url)
+        : null;
+      if (cookieHeader) {
+        await context.setExtraHTTPHeaders({ Cookie: cookieHeader });
+      }
+      const page: Page = await context.newPage();
+      await page.goto(params.url, {
+        waitUntil: BROWSER_WAIT_UNTIL_DOMCONTENTLOADED,
+        timeout: BROWSER_DEFAULT_TIMEOUT_MS,
+      });
+      const html: string = await page.content();
+      if (html.length === 0) {
+        throw new Error(EMPTY_PAGE_CONTENT_ERROR);
+      }
+      if (isAkamaiBlockBody(html)) {
+        throw new Error(AKAMAI_BLOCK_PAGE_ERROR);
+      }
+      const rawStorageState = await context.storageState();
+      const storageState: StorageState = convertToStorageState(rawStorageState);
+      succeeded = true;
+      return { html, storageState };
+    } finally {
+      await context.close();
     }
-    if (isAkamaiBlockBody(html)) {
-      throw new Error(AKAMAI_BLOCK_PAGE_ERROR);
-    }
-    const rawStorageState = await context.storageState();
-    const storageState: StorageState = convertToStorageState(rawStorageState);
-    return { html, storageState };
   } finally {
-    await context.close();
-    await browser.close();
+    if (!succeeded) {
+      await discardSession(browser);
+    }
+    await browser.close().catch(() => undefined);
   }
 };
 
@@ -231,7 +254,8 @@ const attemptFetchPage = async (
     return { error: true, errorMessage: args.lastError };
   }
   try {
-    return await fetchPageOnce(args.params, args.contextOptions);
+    // Retries always take a fresh session instead of a possibly bad warm one.
+    return await fetchPageOnce(args.params, args.contextOptions, args.attempt > 1);
   } catch (error) {
     const errorMessage: string = error instanceof Error ? error.message : UNKNOWN_ERROR_PAGE_FETCH;
     if (args.attempt < FETCH_PAGE_RETRY_COUNT) {

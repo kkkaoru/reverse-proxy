@@ -229,6 +229,64 @@ describe('fetchPage', () => {
   });
 });
 
+describe('fetchPage session reuse', () => {
+  beforeEach(() => {
+    vi.mocked(launchBrowser).mockReset();
+  });
+
+  it('reuses a warm session first and forces a fresh one on retry', async () => {
+    vi.mocked(launchBrowser)
+      .mockRejectedValueOnce(new Error('Transient browser failure'))
+      .mockResolvedValueOnce(
+        createMockBrowser(
+          createMockContext(createMockPage('<html>ok</html>')),
+        ) as unknown as Browser,
+      );
+
+    await fetchPage({ browserWorker: {} as never, url: 'https://example.com/page' });
+
+    expect(vi.mocked(launchBrowser).mock.calls[0]?.[1]).toStrictEqual({ fresh: false });
+    expect(vi.mocked(launchBrowser).mock.calls[1]?.[1]).toStrictEqual({ fresh: true });
+  });
+
+  it('kills a failed session so it is not reused, but only disconnects on success', async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const newBrowserCDPSession = vi.fn().mockResolvedValue({ send });
+    const blockedBrowser = {
+      ...createMockBrowser(
+        createMockContext(createMockPage('<html><head><TITLE>Access Denied</TITLE></head></html>')),
+      ),
+      newBrowserCDPSession,
+    };
+    const okNewCdp = vi.fn();
+    const okBrowser = {
+      ...createMockBrowser(createMockContext(createMockPage('<html>ok</html>'))),
+      newBrowserCDPSession: okNewCdp,
+    };
+    vi.mocked(launchBrowser)
+      .mockResolvedValueOnce(blockedBrowser as unknown as Browser)
+      .mockResolvedValueOnce(okBrowser as unknown as Browser);
+
+    const result = await fetchPage({ browserWorker: {} as never, url: 'https://example.com/page' });
+
+    expect('error' in result).toBe(false);
+    expect(send).toHaveBeenCalledWith('Browser.close');
+    expect(blockedBrowser.close).toHaveBeenCalled();
+    expect(okNewCdp).not.toHaveBeenCalled();
+    expect(okBrowser.close).toHaveBeenCalled();
+  });
+
+  it('ignores errors from disconnecting the browser', async () => {
+    const browser = createMockBrowser(createMockContext(createMockPage('<html>ok</html>')));
+    browser.close.mockRejectedValue(new Error('already disconnected'));
+    vi.mocked(launchBrowser).mockResolvedValue(browser as unknown as Browser);
+
+    const result = await fetchPage({ browserWorker: {} as never, url: 'https://example.com/page' });
+
+    expect('error' in result).toBe(false);
+  });
+});
+
 describe('performSignIn', () => {
   beforeEach(() => {
     vi.mocked(launchBrowser).mockReset();
